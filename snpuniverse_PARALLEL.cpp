@@ -1,3 +1,11 @@
+/*
+ *Last Update: Feb. 25, 2014
+ *Author: Roven Rommel B. Fuentes
+ *TT-Chang Genetic Resources Center, International Rice Research Institute
+ *
+ *SNP_universe with multithreading by chromosome
+*/
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -7,38 +15,32 @@
 #include <fstream>
 #include <string.h>
 #include <sys/resource.h>
-#include <map>
+#include <unordered_map>
 #include <vector>
 #include <gzstream.h>
+#include <time.h>
 #include <pthread.h>
+
 using namespace std;
 
-/*
-http://pubs.opengroup.org/onlinepubs/009695299/basedefs/sys/stat.h.html
-S_ISBLK(m)  Test for a block special file.
-S_ISCHR(m)  Test for a character special file.
-S_ISDIR(m)  Test for a directory.
-S_ISFIFO(m) Test for a pipe or FIFO special file.
-S_ISREG(m)  Test for a regular file.
-S_ISLNK(m)  Test for a symbolic link.
-S_ISSOCK(m) Test for a socket.
-*/
-
 struct threadData{
-   string path;
-   map<string,int> pos;
-   char[20] chromname;
-   bool *snp;
-   short *count;
-   vector<string> vcf_list;
-}
+    string dirpath;
+    vector<string> vcf_list;
+    vector<string> chrom;
+    unordered_map<string,int> chr;
+    char* snp;
+    int tid;
+};
 
-static const char *options="p:P:i:I:x:X:cm:";
+static const char *options="p:P:i:I:x:X:c";
 static string outfile;
 static string path;
 static string input;
 bool compressed=false;
-int multicore=0;
+int SIZE=45000000;
+int NUMTHREADS = 2;
+int DEPTH = 1;
+
 void parseArgs(int argc, char**argv){
     extern char *optarg;
     int c;
@@ -51,39 +53,40 @@ void parseArgs(int argc, char**argv){
 	case 'x':
 	case 'X': outfile = optarg; break; //output file
         case 'c': compressed =true; break; //.gz files
-        case 'm': multicore=atoi(optarg); break; //utilizes pthreads
 	default: break;
         } // switch
     } // while
 } // parseArgs
 
-int checkAlt(char ref,string alt,short *&count,int snppos){
+int checkAlt(char ref,string alt,void *thread_data,int snppos){
+    threadData *t = (threadData*) thread_data;
     int temp1=0,temp2=1;
     if(!alt.compare(".")){ return 0;} //homozygous
-    else if(alt.size()==1 && alt[0]!=ref) return 1;
+    else if(alt.size()==1 && alt[0]!=ref){ 
+	if(t->snp[snppos]!='B') t->snp[snppos]='A'; return 1;
+    }
 
     if(alt.size()>1){ 
 	while(temp1<temp2){
 	    temp2=alt.find_first_of(",",temp1+1);
-	    if(temp2-temp1>2 || temp2==alt.npos){
-		count[snppos]-=2; //IGNORE Indel(insertion/sv) (Remove line to report the pos if SNP is present in other sample(also del filter in locateSNP()); -2 in case the position is represented twice)
-		return 0; //indels,structural variants
+	    if(temp2-temp1>2 || temp2==alt.npos){ //indels,structural variants
+		t->snp[snppos]='B'; 
+		return 0; 
 	    }
 	    temp1=temp2+1;
 	}
     }
+    if(t->snp[snppos]!='B') t->snp[snppos]='A';
     return 1; //multiple ALTs
 }
 
-int locateSNP_1(string filepath,map<string,int> &pos,bool *&snp,short *&count){
+int locateSNP_1(string filepath,void *thread_data){
+    threadData *t = (threadData*) thread_data;
     string linestream,temp,alt;
-    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0;
+    int idx1=0,idx2=0,snppos=0,chrpos=0;
     char ref;
-    int inisize=pos.size();
     
     ifstream fp(filepath.c_str());
-    pair<map<string,int>::iterator,bool> ret;
-    map<string,int>::iterator it;
     if (!fp.is_open()) { //check input file
 	printf("ERROR: Failed to open the input file %s", filepath.c_str());
 	return 1;
@@ -92,52 +95,37 @@ int locateSNP_1(string filepath,map<string,int> &pos,bool *&snp,short *&count){
     for(int x=0;getline(fp,linestream);x++){
 	if(linestream[0]!='#'){
 	    idx1 = linestream.find_first_of("\t",idx1+1); //first column
-            idx1 = linestream.find_first_of("\t",idx1+1); //second column
-            temp=linestream.substr(0,idx1); //get the chr+pos concatenated string
-	    if(inisize==0){ //create map when reading first vcf file
-		snppos=pos.size();
-	        ret = pos.insert(pair<string,int>(temp,snppos)); 
-		if(ret.second!=false){ //avoids duplicate positions
-		    count[snppos]++;
-		}else{
- 		    count[ret.first->second]-=2; //IGNORE INDEL(duplicated positions)
-		    snppos=-1;
-		}
-	    }else{
-	        it=pos.find(temp);
-	        if(it!=pos.end()){
-		    snppos=it->second;
-		    count[snppos]++; //record if the position is map in all samples
-		}else snppos=-1;
-	        //printf("%d",snppos);
-	    }
-	    idx1 = linestream.find_first_of("\t",idx1+1); //skip id column
+            temp=linestream.substr(0,idx1); //get the chrom number
+            idx2 = linestream.find_first_of("\t",++idx1); //second column
+            snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+            chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
+	    idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
     	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
-	    if(idx2-idx1==2 && snppos!=-1){ //skip indels and structural variants
+    
+	    if(idx2-idx1==2){ //skip indels and structural variants
 		ref=linestream[idx2-1]; 
-		alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1);
-	        //printf("%s %d %c %s %d\t",temp.c_str(),snppos,ref,alt.c_str(),snp[snppos]);
-		snp[snppos] = (checkAlt(ref,alt,count,snppos) || snp[snppos]); //check if SNP occur in a position
-                //printf("%d\n",snp[snppos]);
-	    }else if(snppos!=-1){
-		count[snppos]-=2; //IGNORE INDEL(deletion)
+		alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1); 
+	        //printf("%d %c %s %d\t",snppos,ref,alt.c_str(),snp[chrpos][snppos]);
+		checkAlt(ref,alt,t,snppos); //check if SNP occur in a position
+                //printf("%d\n",snp[chrpos][snppos]);
+                
+	    }else{
+		t->snp[snppos]='B'; //IGNORE INDEL(deletion)
 	    }
 	}
-	idx1=idx2=0;
+	idx1=0;
     }
     fp.close();
     return 0;
 }
 
-int locateSNP_2(string filepath,map<string,int> &pos,bool *&snp,short *&count){
+int locateSNP_2(string filepath,void *thread_data){
+    threadData *t = (threadData*) thread_data;
     string linestream,temp,alt;
-    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0;
+    int idx1=0,idx2=0,snppos=0,chrpos=0;
     char ref;
-    int inisize=pos.size();
     
     igzstream fp(filepath.c_str());
-    pair<map<string,int>::iterator,bool> ret;
-    map<string,int>::iterator it;
     if (!fp.good()) { //check input file
 	printf("ERROR: Failed to open the input file %s", filepath.c_str());
 	return 1;
@@ -146,74 +134,71 @@ int locateSNP_2(string filepath,map<string,int> &pos,bool *&snp,short *&count){
     for(int x=0;getline(fp,linestream);x++){
 	if(linestream[0]!='#'){
 	    idx1 = linestream.find_first_of("\t",idx1+1); //first column
-            idx1 = linestream.find_first_of("\t",idx1+1); //second column
-            temp=linestream.substr(0,idx1); //get the chr+pos concatenated string
-	    if(inisize==0){ //create map when reading first vcf file
-		snppos=pos.size();
-	        ret = pos.insert(pair<string,int>(temp,snppos)); 
-		if(ret.second!=false){ //avoids duplicate positions
-		    count[snppos]++;
-		}else{
- 		    count[ret.first->second]-=2; //IGNORE INDEL(duplicated positions)
-		    snppos=-1;
-		}
-	    }else{
-	        it=pos.find(temp);
-	        if(it!=pos.end()){
-		    snppos=it->second;
-		    count[snppos]++; //record if the position is map in all samples
-		}else snppos=-1;
-	        //printf("%d",snppos);
-	    }
-	    idx1 = linestream.find_first_of("\t",idx1+1); //skip id column
+            temp=linestream.substr(0,idx1); //get the chrom number
+            idx2 = linestream.find_first_of("\t",++idx1); //second column
+            snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+            chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
+	    idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
     	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
-	    if(idx2-idx1==2 && snppos!=-1){ //skip indels and structural variants
+    
+	    if(idx2-idx1==2){ //skip indels and structural variants
 		ref=linestream[idx2-1]; 
-		alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1);
-	        //printf("%s %d %c %s %d\t",temp.c_str(),snppos,ref,alt.c_str(),snp[snppos]);
-		snp[snppos] = (checkAlt(ref,alt,count,snppos) || snp[snppos]); //check if SNP occur in a position
-                //printf("%d\n",snp[snppos]);
-	    }else if(snppos!=-1){
-		count[snppos]-=2; //IGNORE INDEL(deletion)
+		alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1); 
+	        //printf("%d %c %s %d\t",snppos,ref,alt.c_str(),snp[chrpos][snppos]);
+		checkAlt(ref,alt,t,snppos); //check if SNP occur in a position
+                //printf("%d\n",snp[chrpos][snppos]);
+                
+	    }else{
+		t->snp[snppos]='B'; //IGNORE INDEL(deletion)
 	    }
 	}
-	idx1=idx2=0;
+	idx1=0;
     }
     fp.close();
     return 0;
 }
 
-int readFolder(string path,map<string,int> &pos,bool *&snp,short *&count,vector<string> &vcf_list){
+void *readFolder(void *thread_data){
     DIR *dp;
-    string temp,exten,filename;
+    threadData *t = (threadData*) thread_data;
+    string temp,exten,filename,curpath;
     struct dirent *ep;
+    time_t start,end;
     int dotpos;
-    dp = opendir(path.c_str());
-    if(path[path.size()-1]!='/') path += '/';
+    
+    dp = opendir(t->dirpath.c_str());
+    if(t->dirpath[t->dirpath.size()-1]!='/') curpath = t->dirpath + '/';
     struct stat filestat;
     if(dp!=NULL){
 	while(ep = readdir(dp)){
+            time(&start);
 	    if(!strcmp(ep->d_name,".") || !strcmp(ep->d_name,"..")) continue;
-	    temp = path + ep->d_name;
+	    temp = curpath + ep->d_name;
             stat(temp.c_str(), &filestat);
 	    filename=ep->d_name;
 	    if(S_ISDIR(filestat.st_mode)){ //recursively read directories
-		readFolder(temp,pos,snp,count,vcf_list);
+                t->dirpath=temp;
+		readFolder(thread_data);
+                t->dirpath=curpath;
 	    }else if(S_ISREG(filestat.st_mode)){
 		//check if vcf
 		dotpos=filename.find_last_of(".");
 		if(dotpos!=filename.npos){
 		    exten=filename.substr(dotpos);
-		    if(!exten.compare(".vcf")){
-		        printf("%s\n",filename.c_str());
-			vcf_list.push_back(temp);
-			locateSNP_1(temp,pos,snp,count);
-		    }else if(!exten.compare(".gz") && compressed){
+		    if(!exten.compare(".vcf") && !compressed && filename.find(t->chrom[t->tid])!=filename.npos){
+		        printf("thread%d -  %s\t",t->tid,filename.c_str());
+			t->vcf_list.push_back(temp);
+			locateSNP_1(temp,thread_data);
+			time(&end);
+            		printf("Time: %.f sec\n",difftime(end,start));
+		    }else if(!exten.compare(".gz") && compressed && filename.find(t->chrom[t->tid])!=filename.npos){
 			exten=filename.substr(filename.find_last_of(".",dotpos-1)); 
 		        if(!exten.compare(".vcf.gz")){
-			    printf("%s\n",filename.c_str());
-			    vcf_list.push_back(temp);
-			    locateSNP_2(temp,pos,snp,count);
+			    printf("thread%d -  %s\t",t->tid,filename.c_str());
+			    t->vcf_list.push_back(temp);
+			    locateSNP_2(temp,thread_data);
+			    time(&end);
+            		    printf("Time: %.f sec\n",difftime(end,start));
 			}
 	            }
 		}
@@ -225,41 +210,58 @@ int readFolder(string path,map<string,int> &pos,bool *&snp,short *&count,vector<
 	closedir (dp);
     }else{
 	printf("ERROR: Can't find the directory.");
-	return 1;
     }
-    return 0;
 }
 
-int printSNPlist_1(map<string,int> &pos,bool *&snp,short *&count,vector<string> vcf_list,string outfile){
-    FILE *output; 
-    outfile+="_SNP_AD.txt"; 
-    output=fopen(outfile.c_str(),"w"); 
-    string linestream,alt,temp1,formatfield,formatval,temp2;
+int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> &samples,FILE *output){
+    threadData *t = (threadData*) thread_data;
+    string linestream,alt,temp1,formatfield,formatval,temp2,samname;
     char ref,*token=NULL,tok_ar[40];
-    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,setsize=vcf_list.size();
+    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=t->vcf_list.size();
     int AD[128];
-    map<string,int>::iterator it;
-    for(int i=0;i<setsize;i++) fprintf(output,">%d %s\n",i,vcf_list[i].c_str()); //sample list
-    fprintf(output,"SampleID\tChrom\tPos\tA\tT\tC\tG\n");//header
+    if(tid==0){
+    	for(int i=0;i<setsize;i++){ 
+  	    for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+            idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
+            samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+            samples.insert(pair<string,int>(samname,samples.size()));
+	    fprintf(output,">%lu %s\n",samples.size()-1,samname.c_str()); //sample list
+    	}
+   
+    	fprintf(output,"SampleID\tChrom\tPos\tA\tT\tC\tG\n");//header
+    }
     for(int i=0;i<setsize;i++){
-    	ifstream fp(vcf_list[i].c_str());
+    	ifstream fp(t->vcf_list[i].c_str());
     	if (!fp.is_open()) { //check input file
-	    printf("ERROR: Failed to open the input file %s", vcf_list[i].c_str());
+	    printf("ERROR: Failed to open the input file %s", t->vcf_list[i].c_str());
 	    return 1;
     	}
+        
+  	//get sample name
+       	for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+        idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
+        samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+
+        if(i==0){ //count SNPs
+	    int snpcount=0;
+	    for(int x=0;x<SIZE;x++){
+		if(t->snp[x]=='A') snpcount++;
+	    }
+	    printf("Total of %d SNPs found.\n",snpcount);
+	}
     
+        idx1=0;
     	for(int x=0;getline(fp,linestream);x++){
 	    if(linestream[0]!='#'){
-            	idx1 = linestream.find_first_of("\t",idx1+1); //CHROM
-            	idx1 = linestream.find_first_of("\t",idx1+1); //POS
-            	temp1=linestream.substr(0,idx1); //get the chr+pos concatenated string
-		it=pos.find(temp1);
-		if(it!=pos.end()) snppos=it->second;
-		else snppos=-1;
-               
-            	if(snppos!=-1 && (count[snppos]==setsize && snp[snppos])){
-		    fprintf(output,"%d\t%s\t",i,it->first.c_str());
-                    idx1 = linestream.find_first_of("\t",idx1+1); //skip ID
+                idx1 = linestream.find_first_of("\t",idx1+1); //first column
+             	temp1 = linestream.substr(0,idx1); //get the chrom number
+            	idx2 = linestream.find_first_of("\t",++idx1); //second column
+            	snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+                chrpos = t->chr.find(temp1)->second;
+              
+            	if(t->snp[snppos]=='A'){
+		    fprintf(output,"%d\t%s\t%d\t",samples.find(samname)->second,temp1.c_str(),snppos);
+                    idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
             	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
 		    if(idx2-idx1==2) ref=linestream[idx2-1];
 		    else ref='.';
@@ -271,15 +273,16 @@ int printSNPlist_1(map<string,int> &pos,bool *&snp,short *&count,vector<string> 
     	    	    formatfield=linestream.substr(idx1,idx2-idx1); 
 		    //format value 
 		    formatval=linestream.substr(idx2+1); 
-		    idx1=0;
+		    idx1=idx3=0;
 	            while(idx1!=formatfield.npos){   
 			idx2 = formatfield.find_first_of(":\0",++idx1);
-			temp2=formatfield.substr(idx1,idx2-idx1); 
+			temp2=formatfield.substr(idx1,idx2-idx1); //AD field
 			idx4 = formatval.find_first_of(":\0",++idx3);
 			if(!temp2.compare("AD")){
-			    if(!checkAlt(ref,alt,count,snppos) || ref=='.'){
-				fprintf(output,"0\t0\t0\t0 (Indel/Structural Variant)\n"); printf("Indel/SV:Sample %d %s %d\n",i,temp1.c_str(),count[snppos]);
-			    }else{
+			    if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
+				fprintf(output,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
+				printf("Indel/SV:Sample %d %s %c\n",i,temp1.c_str(),t->snp[snppos]);
+			    }else{ //printf("%s\n",formatval.c_str());
                                 AD['A']=AD['T']=AD['C']=AD['G']=0;
 				strcpy(tok_ar,formatval.substr(idx3,idx4-idx3).c_str());//fprintf(output,"ref:%c %s %s\t",ref,alt.c_str(),tok_ar);
 				token=strtok(tok_ar,","); //fprintf(output,"%s\n",token);
@@ -301,45 +304,64 @@ int printSNPlist_1(map<string,int> &pos,bool *&snp,short *&count,vector<string> 
 			fprintf(output,"0\t0\t0\t0\n");
 		    }
 	       	}
+                idx1=0;
 	    }
-	    idx1=idx3=0;
     	}
 	fp.close();
     }
-    fclose(output);
+    
     return 0;
 }
 
-int printSNPlist_2(map<string,int> &pos,bool *&snp,short *&count,vector<string> vcf_list,string outfile){
-    FILE *output; 
-    outfile+="_SNP_AD.txt"; 
-    output=fopen(outfile.c_str(),"w"); 
-    string linestream,alt,temp1,formatfield,formatval,temp2;
+int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> &samples,FILE *output){
+    threadData *t = (threadData*) thread_data;
+    string linestream,alt,temp1,formatfield,formatval,temp2,samname;
     char ref,*token=NULL,tok_ar[40];
-    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,setsize=vcf_list.size();
+    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=t->vcf_list.size();
     int AD[128];
-    map<string,int>::iterator it;
-    for(int i=0;i<setsize;i++) fprintf(output,">%d %s\n",i,vcf_list[i].c_str()); //sample list
-    fprintf(output,"SampleID\tChrom\tPos\tA\tT\tC\tG\n");//header
+    if(tid==0){
+    	for(int i=0;i<setsize;i++){ 
+  	    for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+            idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
+            samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+            samples.insert(pair<string,int>(samname,samples.size()));
+	    fprintf(output,">%lu %s\n",samples.size()-1,samname.c_str()); //sample list
+    	}
+   
+    	fprintf(output,"SampleID\tChrom\tPos\tA\tT\tC\tG\n");//header
+    }
     for(int i=0;i<setsize;i++){
-    	igzstream fp(vcf_list[i].c_str());
+    	igzstream fp(t->vcf_list[i].c_str());
     	if (!fp.good()) { //check input file
-	    printf("ERROR: Failed to open the input file %s", vcf_list[i].c_str());
+	    printf("ERROR: Failed to open the input file %s", t->vcf_list[i].c_str());
 	    return 1;
     	}
+        
+  	//get sample name
+       	for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+        idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
+        samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+
+        if(i==0){ //count SNPs
+	    int snpcount=0;
+	    for(int x=0;x<SIZE;x++){
+		if(t->snp[x]=='A') snpcount++;
+	    }
+	    printf("Total of %d SNPs found.\n",snpcount);
+	}
     
+        idx1=0;
     	for(int x=0;getline(fp,linestream);x++){
 	    if(linestream[0]!='#'){
-            	idx1 = linestream.find_first_of("\t",idx1+1); //CHROM
-            	idx1 = linestream.find_first_of("\t",idx1+1); //POS
-            	temp1=linestream.substr(0,idx1); //get the chr+pos concatenated string
-		it=pos.find(temp1);
-		if(it!=pos.end()) snppos=it->second;
-		else snppos=-1;
-               
-            	if(snppos!=-1 && (count[snppos]==setsize && snp[snppos])){
-		    fprintf(output,"%d\t%s\t",i,it->first.c_str());
-                    idx1 = linestream.find_first_of("\t",idx1+1); //skip ID
+                idx1 = linestream.find_first_of("\t",idx1+1); //first column
+             	temp1 = linestream.substr(0,idx1); //get the chrom number
+            	idx2 = linestream.find_first_of("\t",++idx1); //second column
+            	snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+                chrpos = t->chr.find(temp1)->second;
+              
+            	if(t->snp[snppos]=='A'){
+		    fprintf(output,"%d\t%s\t%d\t",samples.find(samname)->second,temp1.c_str(),snppos);
+                    idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
             	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
 		    if(idx2-idx1==2) ref=linestream[idx2-1];
 		    else ref='.';
@@ -351,15 +373,16 @@ int printSNPlist_2(map<string,int> &pos,bool *&snp,short *&count,vector<string> 
     	    	    formatfield=linestream.substr(idx1,idx2-idx1); 
 		    //format value 
 		    formatval=linestream.substr(idx2+1); 
-		    idx1=0;
+		    idx1=idx3=0;
 	            while(idx1!=formatfield.npos){   
 			idx2 = formatfield.find_first_of(":\0",++idx1);
-			temp2=formatfield.substr(idx1,idx2-idx1); 
+			temp2=formatfield.substr(idx1,idx2-idx1); //AD field
 			idx4 = formatval.find_first_of(":\0",++idx3);
 			if(!temp2.compare("AD")){
-			    if(!checkAlt(ref,alt,count,snppos) || ref=='.'){
-				fprintf(output,"0\t0\t0\t0 (Indel/Structural Variant)\n"); printf("Indel/SV:Sample %d %s %d\n",i,temp1.c_str(),count[snppos]);
-			    }else{
+			    if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
+				fprintf(output,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
+				printf("Indel/SV:Sample %d %s %c\n",i,temp1.c_str(),t->snp[snppos]);
+			    }else{ //printf("%s\n",formatval.c_str());
                                 AD['A']=AD['T']=AD['C']=AD['G']=0;
 				strcpy(tok_ar,formatval.substr(idx3,idx4-idx3).c_str());//fprintf(output,"ref:%c %s %s\t",ref,alt.c_str(),tok_ar);
 				token=strtok(tok_ar,","); //fprintf(output,"%s\n",token);
@@ -381,12 +404,12 @@ int printSNPlist_2(map<string,int> &pos,bool *&snp,short *&count,vector<string> 
 			fprintf(output,"0\t0\t0\t0\n");
 		    }
 	       	}
+                idx1=0;
 	    }
-	    idx1=idx3=0;
     	}
 	fp.close();
     }
-    fclose(output);
+    
     return 0;
 }
 
@@ -396,6 +419,13 @@ int main(int argc, char **argv)
     struct rlimit rl;
     rl.rlim_cur = STACK_SIZE;
     int ret = setrlimit(RLIMIT_STACK,&rl);
+    time_t start, end;
+    pthread_t  threads[NUMTHREADS];
+    threadData thread_data[NUMTHREADS];
+    unordered_map<string,int> chrmap,samples;
+    vector<string> chrnames; 
+
+    time(&start);
     parseArgs(argc,argv);
     if (path.empty() || input.empty() || outfile.empty()) {
         cerr << "Usage:\n" << *argv
@@ -403,52 +433,69 @@ int main(int argc, char **argv)
 		  << " -i directory name\n"
 		  << " -x output file\n"
 		  << " -c compressed VCFs (vcf.gz)\n"
-		  << " -m multicore=#of_alloted_cores\n"
                   << endl;
         return 1;
     }
-   
-    DIR *dp;
-    int SIZE=30000000,setsize=0;
-    string curpath,temp;
-    vector<string> vcf_list;
-    bool *snp;
-    map<string,int> pos;
-    short *count;
-    struct dirent *ep;
-    if(path[path.size()-1]=='/'){
-	curpath = path + input;
-    }else{
-	curpath = path + "/" + input;
+
+    chrmap["Chr1"]=0;
+    chrmap["Chr2"]=1;
+    chrmap["Chr3"]=2;
+    chrmap["Chr4"]=3;
+    chrmap["Chr5"]=4;
+    chrmap["Chr6"]=5;
+    chrmap["Chr7"]=6;
+    chrmap["Chr8"]=7;
+    chrmap["Chr9"]=8;
+    chrmap["Chr10"]=9;
+    chrmap["Chr11"]=10;
+    chrmap["Chr12"]=11;
+    chrmap["ChrSy"]=12;
+    chrmap["ChrUn"]=13;
+
+    chrnames.push_back("Chr1");
+    chrnames.push_back("Chr2");
+    chrnames.push_back("Chr3");
+    chrnames.push_back("Chr4");
+    chrnames.push_back("Chr5");
+    chrnames.push_back("Chr6");
+    chrnames.push_back("Chr7");
+    chrnames.push_back("Chr8");
+    chrnames.push_back("Chr9");
+    chrnames.push_back("Chr10");
+    chrnames.push_back("Chr11");
+    chrnames.push_back("Chr12");
+    chrnames.push_back("ChrSy");
+    chrnames.push_back("ChrUn");
+
+    /*THREADING of the comparison*/	
+    for(int i=0;i<NUMTHREADS; i++){
+        thread_data[i].dirpath=path+input;
+    	thread_data[i].chr = chrmap;
+        thread_data[i].chrom = chrnames;
+    	thread_data[i].snp = (char*)calloc(SIZE,sizeof(char));
+    	thread_data[i].tid = i;
+	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]);
     }
-    snp=(bool*)calloc(SIZE,sizeof(bool));
-    count=(short*)calloc(SIZE,sizeof(short));
-    dp = opendir(curpath.c_str());
-    if(curpath[curpath.size()-1]!='/') curpath += '/';
+
+    for(int i=0;i<NUMTHREADS;i++){
+	pthread_join(threads[i],NULL);
+    }
+
+    FILE *output; 
+    outfile+="_SNP_AD.txt"; 
+    output=fopen(outfile.c_str(),"w"); 
     
-    //pthread_t threads[2];
-    //threadData *thread_data = (threadData*)malloc(2*sizeof()threadData);
-    struct stat filestat;
-    if(dp!=NULL){
-	while(ep = readdir(dp)){
-	    if(!strcmp(ep->d_name,".") || !strcmp(ep->d_name,"..")) continue;
-	    temp = curpath + ep->d_name;
-	    stat(temp.c_str(), &filestat);
-	    if(S_ISDIR(filestat.st_mode)){
-		readFolder(temp,pos,snp,count,vcf_list);
-	    }
-	    //printf("%s\n",ep->d_name);
-	    temp.clear();
-	}
-	
-        closedir (dp); 
-	if(vcf_list.size() && !compressed) printSNPlist_1(pos,snp,count,vcf_list,outfile);
-	if(vcf_list.size() && compressed) printSNPlist_2(pos,snp,count,vcf_list,outfile);
-    }else{
-	printf("ERROR: Can't find the directory.");
+    for(int i=0;i<NUMTHREADS;i++){
+       	if(!compressed) printSNPlist_1(i,&thread_data[i],samples,output);
+    	else printSNPlist_2(i,&thread_data[i],samples,output);
     }
-    pos.clear();
-    free(snp);
-    free(count);
+    fclose(output);
+    time(&end);
+    chrmap.clear();
+    for(int i=0;i<NUMTHREADS;i++)
+    	if(thread_data[i].snp!=NULL) free(thread_data[i].snp);
+    
+
+    printf("Time: %.f sec\n",difftime(end,start));
     return 0;
 }
