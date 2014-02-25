@@ -221,7 +221,7 @@ int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> &samples,
     int AD[128];
     if(tid==0){
     	for(int i=0;i<setsize;i++){ 
-  	    for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+  	    for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
             idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
             samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
             samples.insert(pair<string,int>(samname,samples.size()));
@@ -238,7 +238,7 @@ int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> &samples,
     	}
         
   	//get sample name
-       	for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+       	for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
         idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
         samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
 
@@ -321,7 +321,7 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> &samples,
     int AD[128];
     if(tid==0){
     	for(int i=0;i<setsize;i++){ 
-  	    for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+  	    for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
             idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
             samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
             samples.insert(pair<string,int>(samname,samples.size()));
@@ -338,7 +338,7 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> &samples,
     	}
         
   	//get sample name
-       	for(int j=0;j<LEVEL;j++)idx2=t->vcf_list[i].find_last_of("/");
+       	for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
         idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
         samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
 
