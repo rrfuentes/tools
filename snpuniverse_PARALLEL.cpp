@@ -1,5 +1,5 @@
 /*
- *Last Update: March 5, 2014
+ *Last Update: March 10, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -32,6 +32,7 @@ struct threadData{
     unordered_map<string,int> chr;
     unordered_map<string,int> samples;
     char* snp;
+    char* ref;
     int tid;
 };
 
@@ -42,7 +43,7 @@ static string input;
 bool compressed=false;
 bool multioutput=false;
 int SIZE=45000000;
-int NUMTHREADS = 1;
+int NUMTHREADS = 2;
 int DEPTH = 1;
 
 void parseArgs(int argc, char**argv){
@@ -68,7 +69,11 @@ int checkAlt(char ref,string alt,void *thread_data,int snppos){
     int temp1=0,temp2=1;
     if(!alt.compare(".")){ return 0;} //homozygous
     else if(alt.size()==1 && alt[0]!=ref){ 
-	if(t->snp[snppos]!='B') t->snp[snppos]='A'; return 1;
+	if(t->snp[snppos]!='B'){ //disregard all positions with indels or structural variants
+	    t->snp[snppos]='A';
+	    t->ref[snppos]=ref;
+  	    return 1;
+	}
     }
 
     if(alt.size()>1){ 
@@ -81,7 +86,10 @@ int checkAlt(char ref,string alt,void *thread_data,int snppos){
 	    temp1=temp2+1;
 	}
     }
-    if(t->snp[snppos]!='B') t->snp[snppos]='A';
+    if(t->snp[snppos]!='B'){
+	t->snp[snppos]='A';
+	t->ref[snppos]=ref;
+    }
     return 1; //multiple ALTs
 }
 
@@ -438,10 +446,14 @@ void *multiprint_2(void *thread_data){
     int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=t->samples.size();
     int AD[128];
     char stack[4];
+    float qual;
+    string pad("00000000");
 
-    FILE *output; 
+    FILE *output1,*output2; 
     temp1=outfile+"_SNP_AD_"+ t->chrom[t->tid] +".txt"; 
-    output=fopen(temp1.c_str(),"w"); 
+    output1=fopen(temp1.c_str(),"w"); 
+    temp1=outfile+"_SNP_POS_"+ t->chrom[t->tid] +".txt"; 
+    output2=fopen(temp1.c_str(),"w"); 
 
     int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
@@ -460,14 +472,26 @@ void *multiprint_2(void *thread_data){
             idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
             samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
             //sample list
-	    fprintf(output,">%d %s\n",t->samples.find(samname)->second,samname.c_str()); 
+	    fprintf(output1,">%d %s\n",t->samples.find(samname)->second,samname.c_str()); 
     	}
-    	fprintf(output,"SampleID\tChrom\tPos\tSNPname\tAllele1\tAllele2\tA\tT\tC\tG\n");//header
+    	fprintf(output1,"SampleID\tSNP_ID\tA\tC\tG\tT\tQS\n");//header
 
-    //count SNPs
-    int snpcount=0;
+    //count and print SNP position
+    int snpcount=0,padcount=0;
+    string chrpad;
+    if(t->tid<=9) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
+    else chrpad = to_string(static_cast<long long>(t->tid+1));
+    fprintf(output2,"SNP_ID\tChr\tPos\tSource\tRef\n");
+    //SNP_ID:[ref](1)[chr1](2)[pos](8)
     for(int x=0;x<SIZE;x++){
-	if(t->snp[x]=='A') snpcount++;
+	if(t->snp[x]=='A'){ 
+	    snpcount++;
+	    snpname = to_string(static_cast<long long>(x));
+	    padcount = snpname.length();
+	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
+	    else snpname = "1"+chrpad+snpname;
+	    fprintf(output2,"%s\t%s\t%d\t\t%c\n",snpname.c_str(),t->chrom[t->tid].c_str(),x,t->ref[x]);
+	}
     }
 
     printf("%s: %d SNPs.\n",t->chrom[t->tid].c_str(),snpcount);
@@ -491,58 +515,66 @@ void *multiprint_2(void *thread_data){
              	temp1 = linestream.substr(0,idx1); //get the chrom number
             	idx2 = linestream.find_first_of("\t",++idx1); //second column
             	snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
-                chrpos = t->chr.find(temp1)->second;
+                chrpos = t->chr.find(temp1)->second+1;
               
             	if(t->snp[snppos]=='A'){
-		    snpname = to_string(chrpos) + "." + to_string(snppos);//concatenation of Chr1 and Pos
-		    fprintf(output,"%d\t%s\t%d\t%s\t",t->samples.find(samname)->second,temp1.c_str(),snppos,snpname.c_str());
+                    snpname = to_string(static_cast<long long>(snppos));
+		    padcount = snpname.length();
+                    //concatenation of Chr1 and Pos
+		    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
+	            else snpname = "1"+chrpad+snpname;
+		    fprintf(output1,"%d\t%s\t",t->samples.find(samname)->second,snpname.c_str());
                     idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
             	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
 		    if(idx2-idx1==2) ref=linestream[idx2-1];
 		    else ref='.';
 		    idx1=linestream.find_first_of("\t",++idx2);
 	 	    alt=linestream.substr(idx2,idx1-idx2); //alt
-	    	    for(int y=0;y<3;y++)idx1 = linestream.find_first_of("\t",idx1+1); //3columns
+		    idx2=linestream.find_first_of("\t",++idx1);
+		    qual=atof(linestream.substr(idx1,idx2-idx1).c_str());//qual
+		    idx1=idx2;
+	    	    for(int y=0;y<2;y++)idx1 = linestream.find_first_of("\t",idx1+1); //3columns
 		    idx2 = linestream.find_first_of("\t",++idx1);
 		    //format field IDs
     	    	    formatfield=linestream.substr(idx1,idx2-idx1); 
 		    //format value 
 		    formatval=linestream.substr(idx2+1); 
+
 		    //print alleles
-                    stack[0]=ref;
+                    /*stack[0]=ref;
 	            for(int j=0;j<(alt.size()+1)/2;j++) stack[j+1]=alt[j*2];
-	            fprintf(output,"%c\t%c\t",stack[formatval[0]-48],stack[formatval[2]-48]);
+	            fprintf(output1,"%c\t%c\t",stack[formatval[0]-48],stack[formatval[2]-48]);*/
 
  		    //print allele depth
 		    idx1=idx3=0;
 	            while(idx1!=formatfield.npos){   
-			idx2 = formatfield.find_first_of(":\0",idx1); 
+			idx2 = formatfield.find_first_of(":\0",++idx1); 
 			temp2=formatfield.substr(idx1,idx2-idx1); //get field ID
-			idx4 = formatval.find_first_of(":\0",idx3); 
+			idx4 = formatval.find_first_of(":\0",++idx3); 
 			if(!temp2.compare("AD")){
-			    if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
-				fprintf(output,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
+			    /*(if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
+				fprintf(output1,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
 				printf("Indel/SV:Sample %d %s %c\n",i,temp1.c_str(),t->snp[snppos]);
-			    }else{ //printf("%s\n",formatval.c_str());
+			    }else{ //printf("%s\n",formatval.c_str());*/
                                 AD['A']=AD['T']=AD['C']=AD['G']=0;
 				strcpy(tok_ar,formatval.substr(idx3,idx4-idx3).c_str());//get field values
-				token=strtok(tok_ar,","); //fprintf(output,"%s\n",token);
+				token=strtok(tok_ar,","); //fprintf(output1,"%s\n",token);
 				AD[ref]=atoi(token);  //count ref AD
-				token = strtok(NULL,","); //fprintf(output,"%s\t",token);
+				token = strtok(NULL,","); //fprintf(output1,"%s\t",token);
 				for(int j=0;token!=NULL;j+=2){
 				    AD[alt[j]]=atoi(token);
 				    token = strtok(NULL,",");
 			        }
-			        fprintf(output,"%d\t%d\t%d\t%d\n",AD['A'],AD['T'],AD['C'],AD['G']);   
+			        fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);   
 				
-			    }
+			    //}
 			    break;          
 			}
-			idx1=idx2+1;
-			idx3=idx4+1;
+			idx1=idx2;
+			idx3=idx4;
             	    }
 		    if(temp2.compare("AD")){ //Not a SNP in other sample
-			fprintf(output,"0\t0\t0\t0\n");
+			fprintf(output1,"0\t0\t0\t0\t%.2f\n",qual);
 		    }
 	       	}
                 idx1=0;
@@ -550,7 +582,8 @@ void *multiprint_2(void *thread_data){
     	}
 	fp.close();
     }
-    fclose(output);
+    fclose(output1);
+    fclose(output2);
 }
 
 int main(int argc, char **argv)
@@ -631,6 +664,9 @@ int main(int argc, char **argv)
     	thread_data[i].chr = chrmap;
         thread_data[i].chrom = chrnames;
     	thread_data[i].snp = (char*)calloc(SIZE,sizeof(char));
+	thread_data[i].ref = (char*)calloc(SIZE,sizeof(char));
+	if(thread_data[i].snp==NULL){ printf("Not enough space for array."); return 1;}
+        if(thread_data[i].ref==NULL){ printf("Not enough space for array."); return 1;}
     	thread_data[i].tid = i;
 	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]);
     }
@@ -676,10 +712,13 @@ int main(int argc, char **argv)
     time(&end);
     chrmap.clear();
     samples.clear();
-    for(int i=0;i<NUMTHREADS;i++)
+    for(int i=0;i<NUMTHREADS;i++){
     	if(thread_data[i].snp!=NULL) free(thread_data[i].snp);
+	if(thread_data[i].ref!=NULL) free(thread_data[i].ref);
+    }
     
 
     printf("Printing Time: %.f sec\n",difftime(end,start));
+    
     return 0;
 }
