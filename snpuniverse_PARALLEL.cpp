@@ -1,5 +1,5 @@
 /*
- *Last Update: March 10, 2014
+ *Last Update: March 24, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -33,6 +33,9 @@ struct threadData{
     unordered_map<string,int> samples;
     char* snp;
     char* ref;
+    int* count;
+    double* depth;
+    double* qs;
     int tid;
 };
 
@@ -43,6 +46,7 @@ static string input;
 bool compressed=false;
 bool multioutput=false;
 int SIZE=45000000;
+int SAMPLECOUNT=1001;
 int NUMTHREADS = 2;
 int DEPTH = 1;
 
@@ -443,7 +447,7 @@ void *multiprint_2(void *thread_data){
     threadData *t = (threadData*) thread_data;
     string linestream,alt,temp1,formatfield,formatval,temp2,samname,snpname; 
     char ref,*token=NULL,tok_ar[40];
-    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=t->samples.size();
+    int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,DP=0,setsize=t->samples.size();
     int AD[128];
     char stack[4];
     float qual;
@@ -478,6 +482,7 @@ void *multiprint_2(void *thread_data){
 
     //count and print SNP position
     int snpcount=0,padcount=0;
+    bool aSNP = false;
     string chrpad;
     if(t->tid<=9) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
     else chrpad = to_string(static_cast<long long>(t->tid+1));
@@ -519,7 +524,7 @@ void *multiprint_2(void *thread_data){
               
             	if(t->snp[snppos]=='A'){
                     snpname = to_string(static_cast<long long>(snppos));
-		    padcount = snpname.length();
+		    padcount = snpname.length(); //pad 0's
                     //concatenation of Chr1 and Pos
 		    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	            else snpname = "1"+chrpad+snpname;
@@ -566,18 +571,32 @@ void *multiprint_2(void *thread_data){
 				    token = strtok(NULL,",");
 			        }
 			        fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);   
+				t->count[snppos]++;	
+				aSNP = true;		
 				
-			    //}
-			    break;          
+			    //}       
+			}else if(!temp2.compare("DP")){
+			    if(idx4!=idx3)DP=atoi(formatval.substr(idx3,idx4-idx3).c_str());
+			    else{
+				printf("No DP: %s %d",t->chrom[t->tid].c_str(),snppos);
+			    	exit(EXIT_FAILURE);
+			    }
 			}
 			idx1=idx2;
 			idx3=idx4;
             	    }
-		    if(temp2.compare("AD")){ //Not a SNP in other sample
-			fprintf(output1,"0\t0\t0\t0\t%.2f\n",qual);
+		    if(!aSNP){ //Not a SNP in other sample
+			AD['A']=AD['T']=AD['C']=AD['G']=0;
+			AD[ref]=DP; 
+			fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);
 		    }
+		    if(DP>0) t->depth[DP]++;
+                    else {printf("ERROR: Invalid depth for \"%s\" at position: %s",samname.c_str(),snpname.c_str()); exit(EXIT_FAILURE);}
+		    if(qual>0) t->qs[(int)qual/5]++;
+                    else {printf("ERROR: Invalid QS for \"%s\" at position: %s",samname.c_str(),snpname.c_str()); exit(EXIT_FAILURE);}
 	       	}
-                idx1=0;
+                idx1=DP=0;
+		aSNP=false;
 	    }
     	}
 	fp.close();
@@ -592,6 +611,7 @@ int main(int argc, char **argv)
     struct rlimit rl;
     rl.rlim_cur = STACK_SIZE;
     int ret = setrlimit(RLIMIT_STACK,&rl);
+    double *tally1,*tally2,*tally3;
     time_t start, end;
     pthread_t  threads[NUMTHREADS];
     threadData thread_data[NUMTHREADS];
@@ -628,6 +648,9 @@ int main(int argc, char **argv)
 	gid_map.insert(pair<string,int>(linestream.substr(pos1,pos2-pos1),gid));
     }
     
+    tally1=(double*)calloc(SAMPLECOUNT,sizeof(double));
+    tally2=(double*)calloc(SAMPLECOUNT,sizeof(double));
+    tally3=(double*)calloc(SAMPLECOUNT,sizeof(double));
     chrmap["Chr1"]=0;
     chrmap["Chr2"]=1;
     chrmap["Chr3"]=2;
@@ -665,8 +688,14 @@ int main(int argc, char **argv)
         thread_data[i].chrom = chrnames;
     	thread_data[i].snp = (char*)calloc(SIZE,sizeof(char));
 	thread_data[i].ref = (char*)calloc(SIZE,sizeof(char));
-	if(thread_data[i].snp==NULL){ printf("Not enough space for array."); return 1;}
-        if(thread_data[i].ref==NULL){ printf("Not enough space for array."); return 1;}
+	thread_data[i].count = (int*)calloc(SIZE,sizeof(int));
+	thread_data[i].depth = (double*)calloc(SAMPLECOUNT,sizeof(double));
+        thread_data[i].qs = (double*)calloc(SAMPLECOUNT,sizeof(double));
+	if(thread_data[i].snp==NULL){ printf("Not enough space for snp array."); return 1;}
+        if(thread_data[i].ref==NULL){ printf("Not enough space for ref array."); return 1;}
+	if(thread_data[i].count==NULL){ printf("Not enough space for count array."); return 1;}
+	if(thread_data[i].depth==NULL){ printf("Not enough space for depth array."); return 1;}
+        if(thread_data[i].qs==NULL){ printf("Not enough space for qs array."); return 1;}
     	thread_data[i].tid = i;
 	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]);
     }
@@ -697,16 +726,46 @@ int main(int argc, char **argv)
         for(int i=0;i<NUMTHREADS;i++){
 	    pthread_join(threads[i],NULL);
     	}
+        FILE *output1,*output2,*output3;
+	string temp=outfile+"_SNPPOS_vs_VARcount.txt"; 
+	output1=fopen(temp.c_str(),"w"); 
+	temp=outfile+"_POS_vs_DEPTH.txt"; 
+	output2=fopen(temp.c_str(),"w"); 
+        temp=outfile+"_POS_vs_QS.txt"; 
+	output3=fopen(temp.c_str(),"w"); 
+	for(int i=0;i<NUMTHREADS;i++){
+	    //SNPpos vs VarietyCount
+	    for(int j=0;j<SIZE;j++)
+		if(thread_data[i].count[j]!=0) tally1[thread_data[i].count[j]]++;
+	    //POS vs Depth
+	    for(int j=0;j<SAMPLECOUNT;j++){ 
+		tally2[j]+=thread_data[i].depth[j];
+		tally3[j]+=thread_data[i].qs[j];
+	    }
+	}
+        fprintf(output1,"#ofVar\t#ofSNPpos\n");
+        fprintf(output2,"Depth\t#ofCalls\n");
+	fprintf(output3,"QS\t#ofCalls\n");
+	for(int i=0;i<SAMPLECOUNT;i++){ 
+	    if(tally1[i]) fprintf(output1,"%d\t%.0f\n",i,tally1[i]);
+	    if(tally2[i]) fprintf(output2,"%d\t%.0f\n",i,tally2[i]);
+            if(tally3[i]) fprintf(output3,"%d\t%.0f\n",i*5,tally3[i]); //i=QS/5
+	}
+	free(tally1);
+        free(tally2);
+        free(tally3);
+	fclose(output1);
+	fclose(output2);
+        fclose(output3);
     }else{
 	FILE *output; 
         outfile+="_SNP_AD.txt"; 
         output=fopen(outfile.c_str(),"w"); 
-    
         for(int i=0;i<NUMTHREADS;i++){
        	    if(!compressed) printSNPlist_1(i,&thread_data[i],samples,output);
     	    else printSNPlist_2(i,&thread_data[i],samples,output);
     	}
-    	fclose(output);
+    	fclose(output); 
     }
 
     time(&end);
@@ -715,6 +774,8 @@ int main(int argc, char **argv)
     for(int i=0;i<NUMTHREADS;i++){
     	if(thread_data[i].snp!=NULL) free(thread_data[i].snp);
 	if(thread_data[i].ref!=NULL) free(thread_data[i].ref);
+	if(thread_data[i].count!=NULL) free(thread_data[i].count);
+	if(thread_data[i].depth!=NULL) free(thread_data[i].depth);
     }
     
 
