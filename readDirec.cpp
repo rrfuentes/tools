@@ -22,15 +22,16 @@ S_ISLNK(m)  Test for a symbolic link.
 S_ISSOCK(m) Test for a socket.
 */
 
-static const char *options="p:P:i:I:d:D:x:X:y:Y:s:S:a:b:";
+static const char *options="p:P:d:D:x:X:y:Y:s:S:a:b:w:m:";
 static string directable;
 static string filestable;
 static string path;
-static string input;
 static string diskpath;
+static string md5path;
 static int set=-1;
 static int offset1 = 0;
 static int offset2 =0;
+static int depth = 0;
 void parseArgs(int argc, char**argv){
     extern char *optarg;
     int c;
@@ -38,8 +39,6 @@ void parseArgs(int argc, char**argv){
         switch (c) {
 	case 'p':
 	case 'P': path = optarg; break; //complete path to the input
-        case 'i':
-        case 'I': input = optarg; break; //directory
 	case 'd':
 	case 'D': diskpath = optarg; break; //location of storage disk
 	case 'x':
@@ -48,14 +47,16 @@ void parseArgs(int argc, char**argv){
         case 'Y': filestable = optarg; break; //output FILES table
 	case 's':
         case 'S': set = atoi(optarg); break; //set number from list 
-	case 'a': offset1 = atoi(optarg); //offset for adding new sample directories for existing list; next ID after the last tuple in the DB
-	case 'b': offset2 = atoi(optarg); //offset for files(any files within a sample directory) contained in each sample directory
+	case 'a': offset1 = atoi(optarg); break; //offset for adding new sample directories for existing list; next ID after the last tuple in the DB
+	case 'b': offset2 = atoi(optarg); break; //offset for files(any files within a sample directory) contained in each sample directory
+        case 'w': depth = atoi(optarg); break;
+        case 'm': md5path = optarg; break;
 	default: break;
         } // switch
     } // while
 } // parseArgs
 
-void readFolder(FILE *&output2,string indv_f, int folder_c,int &file_c,map<string,int> gid_map,map<string, string> hash_map){
+void readFolder(FILE *&output2,string indv_f, int folder_c,int &file_c,map<string, string> hash_map){
     DIR *dp;
     FILE *fp;
     string file,temp;
@@ -94,10 +95,9 @@ void readFolder(FILE *&output2,string indv_f, int folder_c,int &file_c,map<strin
 int main(int argc, char **argv)
 {
     parseArgs(argc,argv);
-    if (path.empty() || input.empty() || diskpath.empty() || directable.empty() || filestable.empty() || set==-1) {
+    if (path.empty() || diskpath.empty() || directable.empty() || filestable.empty() || set==-1) {
         cerr << "Usage:\n" << *argv
                   << " -p path to directory\n"
-		  << " -i directory name\n"
 		  << " -d storage path\n"
 		  << " -x output for FOLDER table\n"
                   << " -y output for FILES table\n"
@@ -119,16 +119,13 @@ int main(int argc, char **argv)
     FILE *output1, *output2;
     string curpath,filepath1,filepath2,linestream;
     string indv_f; //folder for individual
-    map<string,int> gid_map;
+    map<string,int> gid1_map,gid2_map;
     map<string,string> hash_map;
-    int folder_c=0,file_c=0,pos1,pos2,gid; //counter
+    int folder_c=0,file_c=0,pos1,pos2,gid_dna,gid_seed; //counter
     pair<map<string,int>::iterator,bool> ret1; //map return 
     pair<map<string,string>::iterator,bool> ret2; //map return 
-    if(path[path.size()-1]=='/'){
-	curpath = path + input;
-    }else{
-	curpath = path + "/" + input;
-    }
+    
+    curpath = path;
     filepath1 = directable + ".csv";
     filepath2 = filestable + ".csv";
     struct dirent *ep;     
@@ -139,25 +136,31 @@ int main(int argc, char **argv)
     output2 = fopen(filepath2.c_str(),"w");
 
     //load list of GIDs
-    ifstream list("list_3k.csv");
+    ifstream list("GIDseed_GID_dna_3K.csv");
     if(!list.is_open()){
 	printf("ERROR: Cannot open the GID list.");
 	return 1;
     }
+
+    getline(list,linestream); //remove header
     for(int x=0;getline(list,linestream)!=NULL;x++){
-	gid=0;
-	pos1 = linestream.find_first_of(",") +1;
-        pos2 = linestream.find_first_of(",", pos1);
-	if(pos1==pos2) continue; // skip null BOX_POSITION_CODE
-	gid = atoi(linestream.substr(pos2+1,linestream.find_first_of(",",pos2+1)-pos2).c_str());
-	ret1 = gid_map.insert(pair<string,int>(linestream.substr(pos1,pos2-pos1),gid));
+	gid_seed=0;
+        gid_dna=0;
+	pos1 = linestream.find_first_of(",");
+        if(pos1!=0)gid_seed = atoi(linestream.substr(0,pos1).c_str()); //printf("%d\t",gid_seed);
+        pos2 = linestream.find_first_of(",", ++pos1); 
+        gid_dna = atoi(linestream.substr(pos1,pos2-pos1).c_str()); //printf("%d\n",gid_dna);
+        pos1 = linestream.find_first_of(",", ++pos2);
+	ret1 = gid1_map.insert(pair<string,int>(linestream.substr(pos2,pos1-pos2),gid_seed));
+        ret1 = gid2_map.insert(pair<string,int>(linestream.substr(pos2,pos1-pos2),gid_dna));
 	//if(ret.second==false) printf("NOTE: row %d has duplicate BOX_POSITION_CODE%s.\n",x,linestream.substr(pos1,pos2-pos1).c_str());
-	//cout << gid_map.find(linestream.substr(pos1,pos2-pos1))->second << " ";
+	//cout << gid1_map.find(linestream.substr(pos1,pos2-pos1))->second << " ";
     }
 	
     //load checksum list
     if(set==0){
     	string checkad = curpath + "md5.txt"; 
+	if(!diskpath.empty()) checkad = md5path; //specific address for md5sum
     	ifstream check_s(checkad.c_str());
 	if(!list.is_open()){
 	    printf("ERROR: Cannot open the md5.txt.");
@@ -165,6 +168,7 @@ int main(int argc, char **argv)
     	}
 	for(int x=0;getline(check_s,linestream)!=NULL;x++){
 	    pos1 = linestream.find_first_of("/",36)+1; //NOTE: direc name is 3-4 char long
+	    for(int y=0; y<depth-1;y++) pos1 = linestream.find_first_of("/",pos1)+1; //move until filename 
 	    ret2 = hash_map.insert(pair<string,string>(linestream.substr(pos1,linestream.length()-pos1),linestream.substr(0,32)));
 	    //cout << hash_map.find(linestream.substr(41,linestream.length()-41))->second <<"\n";
         }
@@ -184,8 +188,8 @@ int main(int argc, char **argv)
             if(S_ISDIR(filestat.st_mode)){//if(ep->d_type==DT_DIR){ 
                 folder_c++;
                 if(indv_f[indv_f.size()-1]!='/') indv_f+='/';  
-		fprintf(output1,"%d,%d,%s,%s,.\n",folder_c,gid_map.find(ep->d_name)->second,diskpath.c_str(),indv_f.c_str());
-	       	if(set==0) readFolder(output2,indv_f,folder_c,file_c,gid_map,hash_map);
+		fprintf(output1,"%d,%d,%d,%s,%s,.\n",folder_c,gid1_map.find(ep->d_name)->second,gid2_map.find(ep->d_name)->second,diskpath.c_str(),indv_f.c_str());
+	       	if(set==0) readFolder(output2,indv_f,folder_c,file_c,hash_map);
 		//cout << indv_f<<"\n";
 	    }else{
                 //printf("ERROR: All files must be located in a folder of each respective individual.");
@@ -199,7 +203,8 @@ int main(int argc, char **argv)
     	perror ("Couldn't open the directory");
     fclose(output1);
     fclose(output2);
-    gid_map.clear();
+    gid1_map.clear();
+    gid2_map.clear();
     hash_map.clear();
     return 0;
 }
