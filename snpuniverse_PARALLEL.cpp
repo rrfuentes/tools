@@ -1,5 +1,5 @@
 /*
- *Last Update: March 24, 2014
+ *Last Update: March 28, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -591,9 +591,15 @@ void *multiprint_2(void *thread_data){
 			fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);
 		    }
 		    if(DP>0) t->depth[DP]++;
-                    else {printf("ERROR: Invalid depth for \"%s\" at position: %s",samname.c_str(),snpname.c_str()); exit(EXIT_FAILURE);}
+                    else {
+			t->depth[DP]++;
+			printf("WARNING: Invalid depth for \"%s\" at position: %s\n",samname.c_str(),snpname.c_str()); 
+		    }
 		    if(qual>0) t->qs[(int)qual/5]++;
-                    else {printf("ERROR: Invalid QS for \"%s\" at position: %s",samname.c_str(),snpname.c_str()); exit(EXIT_FAILURE);}
+                    else {
+			t->qs[(int)qual/5]++;
+			printf("WARNING: Invalid QUAL for \"%s\" at position: %s\n",samname.c_str(),snpname.c_str()); 
+		    }
 	       	}
                 idx1=DP=0;
 		aSNP=false;
