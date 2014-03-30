@@ -1,5 +1,5 @@
 /*
- *Last Update: March 28, 2014
+ *Last Update: March 30, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -536,7 +536,13 @@ void *multiprint_2(void *thread_data){
 		    idx1=linestream.find_first_of("\t",++idx2);
 	 	    alt=linestream.substr(idx2,idx1-idx2); //alt
 		    idx2=linestream.find_first_of("\t",++idx1);
-		    qual=atof(linestream.substr(idx1,idx2-idx1).c_str());//qual
+		    temp1 = linestream.substr(idx1,idx2-idx1);
+		    if(idx2!=idx1 && temp1.find_first_not_of("0123456789.") == string::npos){ 
+			qual=atof(temp1.c_str());//qual
+		    }else{
+			qual=0;
+			printf("WARNING: Invalid QUAL for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
+		    }
 		    idx1=idx2;
 	    	    for(int y=0;y<2;y++)idx1 = linestream.find_first_of("\t",idx1+1); //3columns
 		    idx2 = linestream.find_first_of("\t",++idx1);
@@ -559,7 +565,7 @@ void *multiprint_2(void *thread_data){
 			if(!temp2.compare("AD")){
 			    /*(if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
 				fprintf(output1,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
-				printf("Indel/SV:Sample %d %s %c\n",i,temp1.c_str(),t->snp[snppos]);
+				printf("Indel/SV:Sample %d %s %c\n",i,.c_str(),t->snp[snppos]);
 			    }else{ //printf("%s\n",formatval.c_str());*/
                                 AD['A']=AD['T']=AD['C']=AD['G']=0;
 				strcpy(tok_ar,formatval.substr(idx3,idx4-idx3).c_str());//get field values
@@ -576,10 +582,12 @@ void *multiprint_2(void *thread_data){
 				
 			    //}       
 			}else if(!temp2.compare("DP")){
-			    if(idx4!=idx3)DP=atoi(formatval.substr(idx3,idx4-idx3).c_str());
+			    temp1 = formatval.substr(idx3,idx4-idx3);
+			    if(idx4!=idx3 && temp1.find_first_not_of("0123456789") == string::npos) 
+				DP=atoi(temp1.c_str());
 			    else{
-				printf("No DP: %s %d",t->chrom[t->tid].c_str(),snppos);
-			    	exit(EXIT_FAILURE);
+			        DP=0;
+				printf("WARNING: Invalid depth(DP) for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
 			    }
 			}
 			idx1=idx2;
@@ -591,15 +599,10 @@ void *multiprint_2(void *thread_data){
 			fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);
 		    }
 		    if(DP>0) t->depth[DP]++;
-                    else {
-			t->depth[DP]++;
-			printf("WARNING: Invalid depth for \"%s\" at position: %s\n",samname.c_str(),snpname.c_str()); 
-		    }
+                    else t->depth[0]++;
+			
 		    if(qual>0) t->qs[(int)qual/5]++;
-                    else {
-			t->qs[(int)qual/5]++;
-			printf("WARNING: Invalid QUAL for \"%s\" at position: %s\n",samname.c_str(),snpname.c_str()); 
-		    }
+                    else t->qs[0]++;
 	       	}
                 idx1=DP=0;
 		aSNP=false;
