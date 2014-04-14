@@ -1,5 +1,5 @@
 /*
- *Last Update: March 30, 2014
+ *Last Update: April 11, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -71,7 +71,7 @@ void parseArgs(int argc, char**argv){
 int checkAlt(char ref,string alt,void *thread_data,int snppos){
     threadData *t = (threadData*) thread_data;
     int temp1=0,temp2=1;
-    if(!alt.compare(".")){ return 0;} //homozygous
+    if(!alt.compare(".")){ return 0;} //monomorphic
     else if(alt.size()==1 && alt[0]!=ref){ 
 	if(t->snp[snppos]!='B'){ //disregard all positions with indels or structural variants
 	    t->snp[snppos]='A';
@@ -449,15 +449,16 @@ void *multiprint_2(void *thread_data){
     char ref,*token=NULL,tok_ar[40];
     int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,DP=0,setsize=t->samples.size();
     int AD[128];
-    char stack[4];
     float qual;
     string pad("00000000");
 
-    FILE *output1,*output2; 
+    FILE *output1,*output2,*output3; 
     temp1=outfile+"_SNP_AD_"+ t->chrom[t->tid] +".txt"; 
     output1=fopen(temp1.c_str(),"w"); 
     temp1=outfile+"_SNP_POS_"+ t->chrom[t->tid] +".txt"; 
     output2=fopen(temp1.c_str(),"w"); 
+    temp1=outfile+"_SNP_INDELorSTRUCvariant_"+ t->chrom[t->tid] +".txt"; 
+    output3=fopen(temp1.c_str(),"w"); 
 
     int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
@@ -487,6 +488,7 @@ void *multiprint_2(void *thread_data){
     if(t->tid<=9) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
     else chrpad = to_string(static_cast<long long>(t->tid+1));
     fprintf(output2,"SNP_ID\tChr\tPos\tSource\tRef\n");
+    fprintf(output3,"SNP_ID\tChr_Pos\tRef\tAlt\tQual\tAD\n");
     //SNP_ID:[ref](1)[chr1](2)[pos](8)
     for(int x=0;x<SIZE;x++){
 	if(t->snp[x]=='A'){ 
@@ -551,11 +553,6 @@ void *multiprint_2(void *thread_data){
 		    //format value 
 		    formatval=linestream.substr(idx2+1); 
 
-		    //print alleles
-                    /*stack[0]=ref;
-	            for(int j=0;j<(alt.size()+1)/2;j++) stack[j+1]=alt[j*2];
-	            fprintf(output1,"%c\t%c\t",stack[formatval[0]-48],stack[formatval[2]-48]);*/
-
  		    //print allele depth
 		    idx1=idx3=0;
 	            while(idx1!=formatfield.npos){   
@@ -603,7 +600,51 @@ void *multiprint_2(void *thread_data){
 			
 		    if(qual>0) t->qs[(int)qual/5]++;
                     else t->qs[0]++;
-	       	}
+	       	}else if(t->snp[snppos]=='B'){
+		    snpname = to_string(static_cast<long long>(snppos));
+		    padcount = snpname.length(); //pad 0's
+                    //concatenation of Chr1 and Pos
+		    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
+	            else snpname = "1"+chrpad+snpname;
+		    fprintf(output3,"%d\t%s\t",t->samples.find(samname)->second,snpname.c_str());
+                    idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
+            	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
+		    fprintf(output3,"%s\t",linestream.substr(idx1,idx2-idx1).c_str());
+		    idx1=linestream.find_first_of("\t",++idx2);
+	 	    alt=linestream.substr(idx2,idx1-idx2); //alt
+		    idx2=linestream.find_first_of("\t",++idx1);
+		    temp1 = linestream.substr(idx1,idx2-idx1);
+		    if(idx2!=idx1 && temp1.find_first_not_of("0123456789.") == string::npos){ 
+			qual=atof(temp1.c_str());//qual
+		    }else{
+			qual=0;
+			printf("WARNING: Invalid QUAL for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
+		    }
+                    fprintf(output3,"%s\t%.2f\t",alt.c_str(),qual);
+                    idx1=idx2;
+                    for(int y=0;y<2;y++)idx1 = linestream.find_first_of("\t",idx1+1); //3columns
+		    idx2 = linestream.find_first_of("\t",++idx1);
+		    //format field IDs
+    	    	    formatfield=linestream.substr(idx1,idx2-idx1); 
+		    //format value 
+		    formatval=linestream.substr(idx2+1); 
+		  
+ 		    //print allele depth
+		    idx1=idx3=0;
+	            while(idx1!=formatfield.npos){   
+			idx2 = formatfield.find_first_of(":\0",++idx1); 
+			temp2=formatfield.substr(idx1,idx2-idx1); //get field ID
+			idx4 = formatval.find_first_of(":\0",++idx3); 
+			if(!temp2.compare("AD")){
+			     fprintf(output3,"%s\n",formatval.substr(idx3,idx4-idx3).c_str());	
+			     aSNP=true;	   
+			     break;
+			}
+			idx1=idx2;
+			idx3=idx4;
+            	    }
+		    if(aSNP==false)fprintf(output3,"\n");//monomorphic, no AD
+		}
                 idx1=DP=0;
 		aSNP=false;
 	    }
