@@ -1,5 +1,5 @@
 /*
- *Last Update: April 11, 2014
+ *Last Update: April 14, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -73,8 +73,12 @@ int checkAlt(char ref,string alt,void *thread_data,int snppos){
     int temp1=0,temp2=1;
     if(!alt.compare(".")){ return 0;} //monomorphic
     else if(alt.size()==1 && alt[0]!=ref){ 
-	if(t->snp[snppos]!='B'){ //disregard all positions with indels or structural variants
+	if(t->snp[snppos]!='B' && t->snp[snppos]!='C'){ //disregard all positions with indels or structural variants
 	    t->snp[snppos]='A';
+	    t->ref[snppos]=ref;
+  	    return 1;
+	}else if(t->snp[snppos]=='B'){
+	    t->snp[snppos]='C'; //SNP+Indels/strucVariants
 	    t->ref[snppos]=ref;
   	    return 1;
 	}
@@ -84,15 +88,19 @@ int checkAlt(char ref,string alt,void *thread_data,int snppos){
 	while(temp1<temp2){
 	    temp2=alt.find_first_of(",",temp1+1);
 	    if(temp2-temp1>2 || temp2==alt.npos){ //indels,structural variants
-		t->snp[snppos]='B'; 
+		if(t->snp[snppos]=='A') t->snp[snppos]='C'; 
+		else if(t->snp[snppos]!='C') t->snp[snppos]='B';
 		return 0; 
 	    }
 	    temp1=temp2+1;
 	}
     }
-    if(t->snp[snppos]!='B'){
+    if(t->snp[snppos]!='B' && t->snp[snppos]!='C'){
 	t->snp[snppos]='A';
 	t->ref[snppos]=ref;
+    }else if(t->snp[snppos]=='B'){
+	    t->snp[snppos]='C'; //SNP+Indels/strucVariants
+	    t->ref[snppos]=ref;
     }
     return 1; //multiple ALTs
 }
@@ -452,13 +460,15 @@ void *multiprint_2(void *thread_data){
     float qual;
     string pad("00000000");
 
-    FILE *output1,*output2,*output3; 
+    FILE *output1,*output2,*output3,*output4; 
     temp1=outfile+"_SNP_AD_"+ t->chrom[t->tid] +".txt"; 
     output1=fopen(temp1.c_str(),"w"); 
     temp1=outfile+"_SNP_POS_"+ t->chrom[t->tid] +".txt"; 
     output2=fopen(temp1.c_str(),"w"); 
-    temp1=outfile+"_SNP_INDELorSTRUCvariant_"+ t->chrom[t->tid] +".txt"; 
+    temp1=outfile+"_INDELorSTRUCvar_AD_"+ t->chrom[t->tid] +".txt"; 
     output3=fopen(temp1.c_str(),"w"); 
+    temp1=outfile+"_INDELorSTRUCvar_POS_"+ t->chrom[t->tid] +".txt"; 
+    output4=fopen(temp1.c_str(),"w"); 
 
     int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
@@ -489,6 +499,7 @@ void *multiprint_2(void *thread_data){
     else chrpad = to_string(static_cast<long long>(t->tid+1));
     fprintf(output2,"SNP_ID\tChr\tPos\tSource\tRef\n");
     fprintf(output3,"SNP_ID\tChr_Pos\tRef\tAlt\tQual\tAD\n");
+    fprintf(output4,"SNP_ID\tChr\tPos\n");
     //SNP_ID:[ref](1)[chr1](2)[pos](8)
     for(int x=0;x<SIZE;x++){
 	if(t->snp[x]=='A'){ 
@@ -498,6 +509,12 @@ void *multiprint_2(void *thread_data){
 	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	    else snpname = "1"+chrpad+snpname;
 	    fprintf(output2,"%s\t%s\t%d\t\t%c\n",snpname.c_str(),t->chrom[t->tid].c_str(),x,t->ref[x]);
+	}else if(t->snp[x]=='C'){
+            snpname = to_string(static_cast<long long>(x));
+	    padcount = snpname.length();
+	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
+	    else snpname = "1"+chrpad+snpname;
+	    fprintf(output4,"%s\t%s\t%d\n",snpname.c_str(),t->chrom[t->tid].c_str(),x);
 	}
     }
 
@@ -600,7 +617,7 @@ void *multiprint_2(void *thread_data){
 			
 		    if(qual>0) t->qs[(int)qual/5]++;
                     else t->qs[0]++;
-	       	}else if(t->snp[snppos]=='B'){
+	       	}else if(t->snp[snppos]=='C'){
 		    snpname = to_string(static_cast<long long>(snppos));
 		    padcount = snpname.length(); //pad 0's
                     //concatenation of Chr1 and Pos
@@ -653,6 +670,8 @@ void *multiprint_2(void *thread_data){
     }
     fclose(output1);
     fclose(output2);
+    fclose(output3);
+    fclose(output4);
 }
 
 int main(int argc, char **argv)
