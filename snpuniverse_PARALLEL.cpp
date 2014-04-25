@@ -1,5 +1,5 @@
 /*
- *Last Update: April 14, 2014
+ *Last Update: April 25, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -495,7 +495,7 @@ void *multiprint_2(void *thread_data){
     int snpcount=0,padcount=0;
     bool aSNP = false;
     string chrpad;
-    if(t->tid<=9) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
+    if(t->tid<=8) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
     else chrpad = to_string(static_cast<long long>(t->tid+1));
     fprintf(output2,"SNP_ID\tChr\tPos\tSource\tRef\n");
     fprintf(output3,"SNP_ID\tChr_Pos\tRef\tAlt\tQual\tAD\n");
