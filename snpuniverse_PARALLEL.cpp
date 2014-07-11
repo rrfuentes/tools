@@ -1,9 +1,10 @@
 /*
- *Last Update: April 25, 2014
+ *Last Update: July 11, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
  *SNP_universe with multithreading by chromosome
+ *QUAL precision
 */
 
 #include <stdio.h>
@@ -453,10 +454,10 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> samples,F
 
 void *multiprint_2(void *thread_data){
     threadData *t = (threadData*) thread_data;
-    string linestream,alt,temp1,formatfield,formatval,temp2,samname,snpname; 
-    char ref,*token=NULL,tok_ar[40];
+    string linestream,alt,temp1,formatfield,formatval,temp2,samname,snpname,tempSNPname,tempLINE,tempREF; 
+    char ref,*token=NULL,tok_ar[40],buffer[15];
     int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,DP=0,setsize=t->samples.size();
-    int AD[128];
+    int AD[128],GID=0;
     float qual;
     string pad("00000000");
 
@@ -475,7 +476,7 @@ void *multiprint_2(void *thread_data){
 	printf("ERROR:Insufficient number of cores.\n");
 	exit(EXIT_FAILURE);
     }
-	
+    
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(t->tid+1,&cpuset);
@@ -498,8 +499,8 @@ void *multiprint_2(void *thread_data){
     if(t->tid<=8) chrpad = "0"+to_string(static_cast<long long>(t->tid+1));
     else chrpad = to_string(static_cast<long long>(t->tid+1));
     fprintf(output2,"SNP_ID\tChr\tPos\tSource\tRef\n");
-    fprintf(output3,"SNP_ID\tChr_Pos\tRef\tAlt\tQual\tAD\n");
-    fprintf(output4,"SNP_ID\tChr\tPos\n");
+    fprintf(output3,"SampleID\tINDEL_ID\tRef\tAlt\tQual\tAD/DP\n");
+    fprintf(output4,"INDEL_ID\tChr\tPos\n");
     //SNP_ID:[ref](1)[chr1](2)[pos](8)
     for(int x=0;x<SIZE;x++){
 	if(t->snp[x]=='A'){ 
@@ -509,7 +510,7 @@ void *multiprint_2(void *thread_data){
 	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	    else snpname = "1"+chrpad+snpname;
 	    fprintf(output2,"%s\t%s\t%d\t\t%c\n",snpname.c_str(),t->chrom[t->tid].c_str(),x,t->ref[x]);
-	}else if(t->snp[x]=='C'){
+	}else if(t->snp[x]=='B' || t->snp[x]=='C'){
             snpname = to_string(static_cast<long long>(x));
 	    padcount = snpname.length();
 	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
@@ -531,6 +532,7 @@ void *multiprint_2(void *thread_data){
        	for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
         idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
         samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+        GID = t->samples.find(samname)->second;
     
         idx1=0;
     	for(int x=0;getline(fp,linestream);x++){
@@ -547,7 +549,7 @@ void *multiprint_2(void *thread_data){
                     //concatenation of Chr1 and Pos
 		    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	            else snpname = "1"+chrpad+snpname;
-		    fprintf(output1,"%d\t%s\t",t->samples.find(samname)->second,snpname.c_str());
+		    fprintf(output1,"%d\t%s\t",GID,snpname.c_str());
                     idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
             	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
 		    if(idx2-idx1==2) ref=linestream[idx2-1];
@@ -617,16 +619,23 @@ void *multiprint_2(void *thread_data){
 			
 		    if(qual>0) t->qs[(int)qual/5]++;
                     else t->qs[0]++;
-	       	}else if(t->snp[snppos]=='C'){
+	       	}else if(t->snp[snppos]=='B' || t->snp[snppos]=='C'){
 		    snpname = to_string(static_cast<long long>(snppos));
 		    padcount = snpname.length(); //pad 0's
                     //concatenation of Chr1 and Pos
 		    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	            else snpname = "1"+chrpad+snpname;
-		    fprintf(output3,"%d\t%s\t",t->samples.find(samname)->second,snpname.c_str());
+
+		    if(!tempLINE.empty() && tempSNPname.compare(snpname)!=0){ 
+			//remove duplicated positions when indel is present
+			fprintf(output3,"%s\n",tempLINE.c_str());
+		    }
+                    tempLINE.clear();
+		    tempSNPname.clear();
+
                     idx1 = linestream.find_first_of("\t",idx2+1); //skip ID
-            	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
-		    fprintf(output3,"%s\t",linestream.substr(idx1,idx2-idx1).c_str());
+            	    idx2 = linestream.find_first_of("\t",++idx1); //ref
+		    tempREF = linestream.substr(idx1,idx2-idx1).c_str();
 		    idx1=linestream.find_first_of("\t",++idx2);
 	 	    alt=linestream.substr(idx2,idx1-idx2); //alt
 		    idx2=linestream.find_first_of("\t",++idx1);
@@ -637,7 +646,15 @@ void *multiprint_2(void *thread_data){
 			qual=0;
 			printf("WARNING: Invalid QUAL for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
 		    }
-                    fprintf(output3,"%s\t%.2f\t",alt.c_str(),qual);
+		        
+                    if(!alt.compare(".")){
+			sprintf(buffer,"%.2f",qual);
+			tempLINE = to_string(static_cast<long long>(GID))+"\t"+snpname.c_str()+"\t"+ tempREF.c_str()+"\t"+alt.c_str()+"\t"+buffer+"\t";
+			tempSNPname=snpname;
+		    }else{
+			fprintf(output3,"%d\t%s\t%s\t%s\t%.2f\t",GID,snpname.c_str(),tempREF.c_str(),alt.c_str(),qual); 
+		    }
+
                     idx1=idx2;
                     for(int y=0;y<2;y++)idx1 = linestream.find_first_of("\t",idx1+1); //3columns
 		    idx2 = linestream.find_first_of("\t",++idx1);
@@ -653,14 +670,26 @@ void *multiprint_2(void *thread_data){
 			temp2=formatfield.substr(idx1,idx2-idx1); //get field ID
 			idx4 = formatval.find_first_of(":\0",++idx3); 
 			if(!temp2.compare("AD")){
-			     fprintf(output3,"%s\n",formatval.substr(idx3,idx4-idx3).c_str());	
+			     if(!alt.compare(".")) tempLINE+=formatval.substr(idx3,idx4-idx3).c_str();	
+			     else fprintf(output3,"%s\n",formatval.substr(idx3,idx4-idx3).c_str());
 			     aSNP=true;	   
-			     break;
+			     break;//end loop; no need for DP
+			}else if(!temp2.compare("DP")){
+			    temp1 = formatval.substr(idx3,idx4-idx3);
+			    if(idx4!=idx3 && temp1.find_first_not_of("0123456789") == string::npos) 
+				DP=atoi(temp1.c_str());
+			    else{
+			        DP=0;
+				printf("WARNING: Invalid depth(DP) for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
+			    }
 			}
 			idx1=idx2;
 			idx3=idx4;
             	    }
-		    if(aSNP==false)fprintf(output3,"\n");//monomorphic, no AD
+                    if(!aSNP){ //Not a SNP in other sample
+			if(!alt.compare(".")) tempLINE+=to_string(static_cast<long long>(DP));
+			else fprintf(output3,"%d\n",DP);//monomorphic, no AD
+		    }
 		}
                 idx1=DP=0;
 		aSNP=false;
@@ -684,7 +713,7 @@ int main(int argc, char **argv)
     time_t start, end;
     pthread_t  threads[NUMTHREADS];
     threadData thread_data[NUMTHREADS];
-    unordered_map<string,int> chrmap,samples,gid_map;
+    unordered_map<string,int> chrmap,samples,boxcode_map,iris_map;
     vector<string> chrnames; 
 
     time(&start);
@@ -701,20 +730,25 @@ int main(int argc, char **argv)
     }
 
     //load list of GIDs
-    int pos1,pos2,gid;
+    int pos1,pos2,pos3,gid;
     string linestream;
-    ifstream list("list_3k.csv");
+    ifstream list("/home/roven/Documents/Project1/Other_tools/list_3k.csv");
     if(!list.is_open()){
 	printf("ERROR: Cannot open the GID list.");
 	return 1;
     }
     for(int x=0;getline(list,linestream)!=NULL;x++){
 	gid=0;
-	pos1 = linestream.find_first_of(",") +1;
-        pos2 = linestream.find_first_of(",", pos1);
-	if(pos1==pos2) continue; // skip null BOX_POSITION_CODE
-	gid = atoi(linestream.substr(pos2+1,linestream.find_first_of(",",pos2+1)-pos2-1).c_str());
-	gid_map.insert(pair<string,int>(linestream.substr(pos1,pos2-pos1),gid));
+	pos1 = linestream.find_first_of(",");
+        pos2 = linestream.find_first_of(",", pos1+1);
+	if(pos1+1==pos2) continue; // skip rows with null BOX_POSITION_CODE
+        pos3 = linestream.find_first_of(",",pos2+1);
+	gid = atoi(linestream.substr(pos2+1,pos3-pos2-1).c_str());
+	boxcode_map.insert(pair<string,int>(linestream.substr(pos1+1,pos2-pos1-1),gid));
+	printf("%s ",linestream.substr(pos1+1,pos2-pos1-1).c_str());
+	pos2 = linestream.find_first_of(",",pos3+1); //save IRIS_name
+	iris_map.insert(pair<string,int>(linestream.substr(pos3+1,pos2-pos3-1),gid));
+	printf("%d %s\n",gid,linestream.substr(pos3+1,pos2-pos3-1).c_str());
     }
     
     tally1=(double*)calloc(SAMPLECOUNT,sizeof(double));
@@ -779,11 +813,15 @@ int main(int argc, char **argv)
   	for(int j=0;j<DEPTH;j++)idx2=thread_data[0].vcf_list[i].find_last_of("/");
         idx1=thread_data[0].vcf_list[i].find_last_of("/",idx2-1)+1;  
         samname = thread_data[0].vcf_list[i].substr(idx1,idx2-idx1); 
-        samples.insert(pair<string,int>(samname,gid_map.find(samname)->second));
+        if(samname.find("IRIS")==string::npos)
+            samples.insert(pair<string,int>(samname,boxcode_map.find(samname)->second));
+	else
+	    samples.insert(pair<string,int>(samname,iris_map.find(samname)->second));
     }
 
     time(&end);
-    gid_map.clear();
+    boxcode_map.clear();
+    iris_map.clear();
     printf("Union Time: %.f sec\n",difftime(end,start));
     
     //PRINTING
