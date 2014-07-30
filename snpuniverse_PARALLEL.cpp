@@ -1,10 +1,13 @@
 /*
- *Last Update: July 11, 2014
+ *Last Update: July 25, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
  *SNP_universe with multithreading by chromosome
  *QUAL precision
+
+ *COMPILE:
+	g++ -o snpuniverse_SERIAL snpuniverse_SERIAL.cpp -lgzstream -lz -std=c++0x -lpthread
 */
 
 #include <stdio.h>
@@ -87,16 +90,17 @@ int checkAlt(char ref,string alt,void *thread_data,int snppos){
 
     if(alt.size()>1){ 
 	while(temp1<temp2){
-	    temp2=alt.find_first_of(",",temp1+1);
+	    temp2=alt.find_first_of(",",temp1+1); //check for multiple ALTs
 	    if(temp2-temp1>2 || temp2==alt.npos){ //indels,structural variants
-		if(t->snp[snppos]=='A') t->snp[snppos]='C'; 
-		else if(t->snp[snppos]!='C') t->snp[snppos]='B';
+		if(t->snp[snppos]=='A') t->snp[snppos]='C';  //SNP+Indel in the same position
+		else if(t->snp[snppos]!='C') t->snp[snppos]='B'; //Indel only
 		return 0; 
 	    }
 	    temp1=temp2+1;
 	}
     }
-    if(t->snp[snppos]!='B' && t->snp[snppos]!='C'){
+    //reaching this point means that there are more than two SNP alleles/multiple ALTs
+    if(t->snp[snppos]!='B' && t->snp[snppos]!='C'){ //SNPs only in a position
 	t->snp[snppos]='A';
 	t->ref[snppos]=ref;
     }else if(t->snp[snppos]=='B'){
@@ -124,6 +128,7 @@ int locateSNP_1(string filepath,void *thread_data){
             temp=linestream.substr(0,idx1); //get the chrom number
             idx2 = linestream.find_first_of("\t",++idx1); //second column
             snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+            if(snppos>45000000) printf("NOTE: Chromosome length is greater than 45Mb.\n");
             chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
 	    idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
     	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
@@ -163,6 +168,7 @@ int locateSNP_2(string filepath,void *thread_data){
             temp=linestream.substr(0,idx1); //get the chrom number
             idx2 = linestream.find_first_of("\t",++idx1); //second column
             snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+	    if(snppos>45000000) printf("NOTE: Chromosome length is greater than 45Mb.\n");
             chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
 	    idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
     	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
@@ -192,17 +198,17 @@ void *readFolder(void *thread_data){
     time_t start,end;
     int dotpos;
 
-    int numcor = sysconf(_SC_NPROCESSORS_ONLN);
+    /*int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
 	printf("ERROR:Insufficient number of cores.\n");
 	exit(EXIT_FAILURE);
     }
-	
+
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(t->tid+1,&cpuset);
 
-    sched_setaffinity(0,sizeof(cpuset),&cpuset);
+    sched_setaffinity(0,sizeof(cpuset),&cpuset);*/
     
     dp = opendir(t->dirpath.c_str());
     if(t->dirpath[t->dirpath.size()-1]!='/') curpath = t->dirpath + '/';
@@ -241,7 +247,7 @@ void *readFolder(void *thread_data){
 			}
 	            }
 		}
-		
+
 	    }
 	    temp.clear();
 	    filename.clear();
@@ -332,7 +338,7 @@ int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> samples,F
 				    token = strtok(NULL,",");
 			        }
 			        fprintf(output,"%d\t%d\t%d\t%d\n",AD['A'],AD['T'],AD['C'],AD['G']);   
-				
+
 			    }
 			    break;          
 			}
@@ -432,7 +438,7 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> samples,F
 				    token = strtok(NULL,",");
 			        }
 			        fprintf(output,"%d\t%d\t%d\t%d\n",AD['A'],AD['T'],AD['C'],AD['G']);   
-				
+
 			    }
 			    break;          
 			}
@@ -595,7 +601,7 @@ void *multiprint_2(void *thread_data){
 			        fprintf(output1,"%d\t%d\t%d\t%d\t%.2f\n",AD['A'],AD['C'],AD['G'],AD['T'],qual);   
 				t->count[snppos]++;	
 				aSNP = true;		
-				
+
 			    //}       
 			}else if(!temp2.compare("DP")){
 			    temp1 = formatval.substr(idx3,idx4-idx3);
@@ -616,7 +622,7 @@ void *multiprint_2(void *thread_data){
 		    }
 		    if(DP>0) t->depth[DP]++;
                     else t->depth[0]++;
-			
+
 		    if(qual>0) t->qs[(int)qual/5]++;
                     else t->qs[0]++;
 	       	}else if(t->snp[snppos]=='B' || t->snp[snppos]=='C'){
@@ -646,7 +652,7 @@ void *multiprint_2(void *thread_data){
 			qual=0;
 			printf("WARNING: Invalid QUAL for \"%s\" at position: %s:\"%s\"\n",samname.c_str(),snpname.c_str(),temp1.c_str()); 
 		    }
-		        
+
                     if(!alt.compare(".")){
 			sprintf(buffer,"%.2f",qual);
 			tempLINE = to_string(static_cast<long long>(GID))+"\t"+snpname.c_str()+"\t"+ tempREF.c_str()+"\t"+alt.c_str()+"\t"+buffer+"\t";
@@ -662,7 +668,7 @@ void *multiprint_2(void *thread_data){
     	    	    formatfield=linestream.substr(idx1,idx2-idx1); 
 		    //format value 
 		    formatval=linestream.substr(idx2+1); 
-		  
+
  		    //print allele depth
 		    idx1=idx3=0;
 	            while(idx1!=formatfield.npos){   
@@ -705,7 +711,7 @@ void *multiprint_2(void *thread_data){
 
 int main(int argc, char **argv)
 {
-    const rlim_t STACK_SIZE = 1000*1024*1024*2; 
+    const rlim_t STACK_SIZE = 1000*1024*1024*4lu; 
     struct rlimit rl;
     rl.rlim_cur = STACK_SIZE;
     int ret = setrlimit(RLIMIT_STACK,&rl);
@@ -743,12 +749,12 @@ int main(int argc, char **argv)
         pos2 = linestream.find_first_of(",", pos1+1);
 	if(pos1+1==pos2) continue; // skip rows with null BOX_POSITION_CODE
         pos3 = linestream.find_first_of(",",pos2+1);
-	gid = atoi(linestream.substr(pos2+1,pos3-pos2-1).c_str());
+	if(pos2+1<pos3) gid = atoi(linestream.substr(pos2+1,pos3-pos2-1).c_str());
 	boxcode_map.insert(pair<string,int>(linestream.substr(pos1+1,pos2-pos1-1),gid));
-	printf("%s ",linestream.substr(pos1+1,pos2-pos1-1).c_str());
+	//printf("%s ",linestream.substr(pos1+1,pos2-pos1-1).c_str());
 	pos2 = linestream.find_first_of(",",pos3+1); //save IRIS_name
 	iris_map.insert(pair<string,int>(linestream.substr(pos3+1,pos2-pos3-1),gid));
-	printf("%d %s\n",gid,linestream.substr(pos3+1,pos2-pos3-1).c_str());
+	//printf("%d %s\n",gid,linestream.substr(pos3+1,pos2-pos3-1).c_str());
     }
     
     tally1=(double*)calloc(SAMPLECOUNT,sizeof(double));
