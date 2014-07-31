@@ -258,7 +258,7 @@ void *readFolder(void *thread_data){
     }
 }
 
-int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> samples,FILE *output){
+/*int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> samples,FILE *output){
     threadData *t = (threadData*) thread_data;
     string linestream,alt,temp1,formatfield,formatval,temp2,samname;
     char ref,*token=NULL,tok_ar[40];
@@ -456,7 +456,7 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> samples,F
     }
     
     return 0;
-}
+}*/
 
 void *multiprint_2(void *thread_data){
     threadData *t = (threadData*) thread_data;
