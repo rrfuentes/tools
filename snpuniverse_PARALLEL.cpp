@@ -1,5 +1,4 @@
-/*
- *Last Update: July 25, 2014
+/*Last Update: Aug. 12, 2014
  *Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
@@ -8,6 +7,8 @@
 
  *COMPILE:
 	g++ -o snpuniverse_SERIAL snpuniverse_SERIAL.cpp -lgzstream -lz -std=c++0x -lpthread
+
+ *NOTE: Check SAMPLECOUNT and NUMTHREADS before running this program.
 */
 
 #include <stdio.h>
@@ -43,16 +44,19 @@ struct threadData{
     int tid;
 };
 
-static const char *options="p:P:i:I:x:X:cm";
+static const char *options="p:P:i:I:x:X:cmU:u:";
 static string outfile;
 static string path;
-static string input;
+static string uniqlist_path;
 bool compressed=false;
 bool multioutput=false;
+int chromidx=0;
 int SIZE=45000000;
-int SAMPLECOUNT=1001;
-int NUMTHREADS = 2;
+int SAMPLECOUNT=1000;
+int NUMTHREADS = 14;
 int DEPTH = 1;
+
+int COUNTALLSNP=0;
 
 void parseArgs(int argc, char**argv){
     extern char *optarg;
@@ -62,11 +66,13 @@ void parseArgs(int argc, char**argv){
 	case 'p':
 	case 'P': path = optarg; break; //complete path to the input
         case 'i':
-        case 'I': input = optarg; break; //directory
+        case 'I': chromidx = atoi(optarg); break; //directory
 	case 'x':
 	case 'X': outfile = optarg; break; //output file
         case 'c': compressed =true; break; //.gz files
         case 'm': multioutput=true; break; //multiple outputs files by chrom
+        case 'U': 
+        case 'u': uniqlist_path = optarg; break; //list of positions from other runs; this parameter is used when upgrading or merging SNP_universes
 	default: break;
         } // switch
     } // while
@@ -161,31 +167,32 @@ int locateSNP_2(string filepath,void *thread_data){
 	printf("ERROR: Failed to open the input file %s", filepath.c_str());
 	return 1;
     }
+
+        for(int x=0; std::getline(fp,linestream);x++)
+        {
+            if(linestream[0]!='#'){
+	    	idx1 = linestream.find_first_of("\t",idx1+1); //first column
+            	temp=linestream.substr(0,idx1); //get the chrom number
+            	idx2 = linestream.find_first_of("\t",++idx1); //second column
+           	snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
+	    	if(snppos>45000000) printf("NOTE: Chromosome length is greater than 45Mb.\n");
+            	chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
+	    	idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
+    	    	idx2 = linestream.find_first_of("\t",idx1+1); //ref
     
-    for(int x=0;getline(fp,linestream);x++){
-	if(linestream[0]!='#'){
-	    idx1 = linestream.find_first_of("\t",idx1+1); //first column
-            temp=linestream.substr(0,idx1); //get the chrom number
-            idx2 = linestream.find_first_of("\t",++idx1); //second column
-            snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
-	    if(snppos>45000000) printf("NOTE: Chromosome length is greater than 45Mb.\n");
-            chrpos = t->chr.find(temp)->second; //printf("%s %d %d\n",temp.c_str(),chrpos,snppos);
-	    idx1 = linestream.find_first_of("\t",idx2+1); //skip id column
-    	    idx2 = linestream.find_first_of("\t",idx1+1); //ref
-    
-	    if(idx2-idx1==2){ //skip indels and structural variants
-		ref=linestream[idx2-1]; 
-		alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1); 
-	        //printf("%d %c %s %d\t",snppos,ref,alt.c_str(),snp[chrpos][snppos]);
-		checkAlt(ref,alt,t,snppos); //check if SNP occur in a position
-                //printf("%d\n",snp[chrpos][snppos]);
+	    	if(idx2-idx1==2){ //skip indels and structural variants
+		    ref=linestream[idx2-1]; 
+		    alt=linestream.substr(idx2+1,linestream.find_first_of("\t",idx2+1)-idx2-1); 
+	            //printf("%d %c %s %d\t",snppos,ref,alt.c_str(),snp[chrpos][snppos]);
+		    checkAlt(ref,alt,t,snppos); //check if SNP occur in a position
+                    //printf("%d\n",snp[chrpos][snppos]);
                 
-	    }else{
-		t->snp[snppos]='B'; //IGNORE INDEL(deletion)
+	    	}else{
+		    t->snp[snppos]='B'; //IGNORE INDEL(deletion)
+	    	}
 	    }
-	}
-	idx1=0;
-    }
+	    idx1=0;
+        }
     fp.close();
     return 0;
 }
@@ -193,22 +200,48 @@ int locateSNP_2(string filepath,void *thread_data){
 void *readFolder(void *thread_data){
     DIR *dp;
     threadData *t = (threadData*) thread_data;
-    string temp,exten,filename,curpath,tempchrom;
+    string temp,exten,filename,curpath,tempchrom,samname;
     struct dirent *ep;
     time_t start,end;
-    int dotpos;
+    int dotpos,idx1,idx2;
+    unordered_map<string,int> excluded_acc;
 
     /*int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
 	printf("ERROR:Insufficient number of cores.\n");
 	exit(EXIT_FAILURE);
-    }
+    }*/
 
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(t->tid+1,&cpuset);
 
-    sched_setaffinity(0,sizeof(cpuset),&cpuset);*/
+    sched_setaffinity(0,sizeof(cpuset),&cpuset);
+
+    excluded_acc["CX578"]=0;
+    excluded_acc["CX420"]=0;
+    excluded_acc["CX410"]=0;
+    excluded_acc["CX419"]=0;
+    excluded_acc["CX424"]=0;
+    excluded_acc["CX579"]=0;
+    excluded_acc["CX414"]=0;
+    excluded_acc["CX413"]=0;
+    excluded_acc["CX422"]=0;
+    excluded_acc["CX427"]=0;
+    excluded_acc["CX421"]=0;
+    excluded_acc["CX428"]=0;
+    excluded_acc["CX561"]=0;
+    excluded_acc["CX416"]=0;
+    excluded_acc["CX418"]=0;
+    excluded_acc["CX426"]=0;
+    excluded_acc["CX417"]=0;
+    excluded_acc["CX429"]=0;
+    excluded_acc["CX408"]=0;
+    excluded_acc["CX411"]=0;
+    excluded_acc["CX409"]=0;
+    excluded_acc["CX425"]=0;
+    excluded_acc["CX423"]=0;
+    excluded_acc["B231"]=0;
     
     dp = opendir(t->dirpath.c_str());
     if(t->dirpath[t->dirpath.size()-1]!='/') curpath = t->dirpath + '/';
@@ -232,6 +265,7 @@ void *readFolder(void *thread_data){
 		    tempchrom = t->chrom[t->tid] + ".";
 		    if(!exten.compare(".vcf") && !compressed && filename.find(tempchrom)!=filename.npos){
 		        printf("thread%d -  %s\t",t->tid,filename.c_str());
+			//fprintf(t->vcf_list,"%s\n",temp.c_str());
 			t->vcf_list.push_back(temp);
 			locateSNP_1(temp,thread_data);
 			time(&end);
@@ -240,6 +274,13 @@ void *readFolder(void *thread_data){
 			exten=filename.substr(filename.find_last_of(".",dotpos-1)); 
 		        if(!exten.compare(".vcf.gz")){
 			    printf("thread%d -  %s\t",t->tid,filename.c_str());
+			    //fprintf(t->vcf_list,"%s\n",temp.c_str());
+                            //get sample name
+       			    for(int j=0;j<DEPTH;j++)idx2=temp.find_last_of("/");
+       			    idx1=temp.find_last_of("/",idx2-1)+1;
+                 	    samname = temp.substr(idx1,idx2-idx1);
+       			    if(excluded_acc.find(samname)!=excluded_acc.end()) continue;
+
 			    t->vcf_list.push_back(temp);
 			    locateSNP_2(temp,thread_data);
 			    time(&end);
@@ -256,15 +297,16 @@ void *readFolder(void *thread_data){
     }else{
 	printf("ERROR: Can't find the directory.");
     }
+    excluded_acc.clear();
 }
 
-/*int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> samples,FILE *output){
+int printSNPlist_1(int tid,void *thread_data,unordered_map<string,int> samples,FILE *output){
     threadData *t = (threadData*) thread_data;
     string linestream,alt,temp1,formatfield,formatval,temp2,samname;
     char ref,*token=NULL,tok_ar[40];
     int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=samples.size();
     int AD[128];
-    if(tid==0){
+    /*if(tid==0){
     	for(int i=0;i<setsize;i++){ 
   	    for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
             idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
@@ -353,7 +395,7 @@ void *readFolder(void *thread_data){
 	    }
     	}
 	fp.close();
-    }
+    }*/
     
     return 0;
 }
@@ -364,7 +406,7 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> samples,F
     char ref,*token=NULL,tok_ar[40];
     int idx1=0,idx2=0,idx3=0,idx4=0,snppos=0,chrpos=0,setsize=samples.size();
     int AD[128],stack[4];
-    if(tid==0){
+    /*if(tid==0){
     	for(int i=0;i<setsize;i++){ 
   	    for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
             idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
@@ -453,10 +495,10 @@ int printSNPlist_2(int tid,void *thread_data,unordered_map<string,int> samples,F
 	    }
     	}
 	fp.close();
-    }
+    }*/
     
     return 0;
-}*/
+}
 
 void *multiprint_2(void *thread_data){
     threadData *t = (threadData*) thread_data;
@@ -477,11 +519,12 @@ void *multiprint_2(void *thread_data){
     temp1=outfile+"_INDELorSTRUCvar_POS_"+ t->chrom[t->tid] +".txt"; 
     output4=fopen(temp1.c_str(),"w"); 
 
-    int numcor = sysconf(_SC_NPROCESSORS_ONLN);
+   
+    /*int numcor = sysconf(_SC_NPROCESSORS_ONLN);
     if(t->tid>=numcor){
 	printf("ERROR:Insufficient number of cores.\n");
 	exit(EXIT_FAILURE);
-    }
+    }*/
     
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
@@ -489,14 +532,14 @@ void *multiprint_2(void *thread_data){
 
     sched_setaffinity(0,sizeof(cpuset),&cpuset);
 
-    	for(int i=0;i<setsize;i++){ 
-  	    for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
-            idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
-            samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
-            //sample list
-	    fprintf(output1,">%d %s\n",t->samples.find(samname)->second,samname.c_str()); 
-    	}
-    	fprintf(output1,"SampleID\tSNP_ID\tA\tC\tG\tT\tQS\n");//header
+    for(int i=0;i<setsize;i++){ 
+  	for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
+        idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
+        samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
+        //sample list
+	if(t->samples.find(samname)!=t->samples.end()) fprintf(output1,">%d %s\n",t->samples.find(samname)->second,samname.c_str()); 
+    }
+    fprintf(output1,"SampleID\tSNP_ID\tA\tC\tG\tT\tQS\n");//header
 
     //count and print SNP position
     int snpcount=0,padcount=0;
@@ -515,20 +558,24 @@ void *multiprint_2(void *thread_data){
 	    padcount = snpname.length();
 	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	    else snpname = "1"+chrpad+snpname;
-	    fprintf(output2,"%s\t%s\t%d\t\t%c\n",snpname.c_str(),t->chrom[t->tid].c_str(),x,t->ref[x]);
+            //print positions
+	    if(t->tid<12) fprintf(output2,"%s\t%d\t%d\t\t%c\n",snpname.c_str(),(t->tid+3),x,t->ref[x]);
+	    else fprintf(output2,"%s\t%d\t%d\t\t%c\n",snpname.c_str(),(t->tid+999988),x,t->ref[x]);
 	}else if(t->snp[x]=='B' || t->snp[x]=='C'){
             snpname = to_string(static_cast<long long>(x));
 	    padcount = snpname.length();
 	    if(padcount<8) snpname = "1"+chrpad+pad.substr(0,8-padcount)+snpname;
 	    else snpname = "1"+chrpad+snpname;
-	    fprintf(output4,"%s\t%s\t%d\n",snpname.c_str(),t->chrom[t->tid].c_str(),x);
+            if(t->tid<12) fprintf(output4,"%s\t%d\t%d\n",snpname.c_str(),(t->tid+3),x);
+            else fprintf(output4,"%s\t%d\t%d\n",snpname.c_str(),(t->tid+999988),x);
 	}
     }
-
+    fclose(output2);
+    fclose(output4);
     printf("%s: %d SNPs.\n",t->chrom[t->tid].c_str(),snpcount);
-
+    
     for(int i=0;i<setsize;i++){
-    	igzstream fp(t->vcf_list[i].c_str());
+        igzstream fp(t->vcf_list[i].c_str());
     	if (!fp.good()) { //check input file
 	    printf("ERROR: Failed to open the input file %s", t->vcf_list[i].c_str());
 	    exit(EXIT_FAILURE);
@@ -537,9 +584,11 @@ void *multiprint_2(void *thread_data){
   	//get sample name
        	for(int j=0;j<DEPTH;j++)idx2=t->vcf_list[i].find_last_of("/");
         idx1=t->vcf_list[i].find_last_of("/",idx2-1)+1;  
-        samname = t->vcf_list[i].substr(idx1,idx2-idx1); 
-        GID = t->samples.find(samname)->second;
-    
+        samname = t->vcf_list[i].substr(idx1,idx2-idx1);
+        if(t->samples.find(samname)!=t->samples.end()) GID = t->samples.find(samname)->second;
+	else{ printf("The sample has no GID:%s\n",samname.c_str()); continue;};
+      
+        
         idx1=0;
     	for(int x=0;getline(fp,linestream);x++){
 	    if(linestream[0]!='#'){
@@ -549,7 +598,7 @@ void *multiprint_2(void *thread_data){
             	snppos = atoi(linestream.substr(idx1,idx2-idx1).c_str()); //get the SNP pos
                 chrpos = t->chr.find(temp1)->second+1;
               
-            	if(t->snp[snppos]=='A'){
+            	if(t->snp[snppos]=='A'){ //COUNTALLSNP++;
                     snpname = to_string(static_cast<long long>(snppos));
 		    padcount = snpname.length(); //pad 0's
                     //concatenation of Chr1 and Pos
@@ -585,10 +634,6 @@ void *multiprint_2(void *thread_data){
 			temp2=formatfield.substr(idx1,idx2-idx1); //get field ID
 			idx4 = formatval.find_first_of(":\0",++idx3); 
 			if(!temp2.compare("AD")){
-			    /*(if((!checkAlt(ref,alt,thread_data,snppos) && alt[0]!='.') || ref=='.'){
-				fprintf(output1,"0\t0\t0\t0 (Indel/Structural Variant)\n"); 
-				printf("Indel/SV:Sample %d %s %c\n",i,.c_str(),t->snp[snppos]);
-			    }else{ //printf("%s\n",formatval.c_str());*/
                                 AD['A']=AD['T']=AD['C']=AD['G']=0;
 				strcpy(tok_ar,formatval.substr(idx3,idx4-idx3).c_str());//get field values
 				token=strtok(tok_ar,","); //fprintf(output1,"%s\n",token);
@@ -701,12 +746,13 @@ void *multiprint_2(void *thread_data){
 		aSNP=false;
 	    }
     	}
+        //printf("ALL SNP positions in %s: %d\n",samname.c_str(),COUNTALLSNP);
+        //COUNTALLSNP=0;
 	fp.close();
     }
+    
     fclose(output1);
-    fclose(output2);
     fclose(output3);
-    fclose(output4);
 }
 
 int main(int argc, char **argv)
@@ -724,10 +770,10 @@ int main(int argc, char **argv)
 
     time(&start);
     parseArgs(argc,argv);
-    if (path.empty() || input.empty() || outfile.empty()) {
+    if (path.empty() || outfile.empty()) {
         cerr << "Usage:\n" << *argv
                   << " -p path to directory\n"
-		  << " -i directory name\n"
+		  << " -i chromosome index\n"
 		  << " -x output file\n"
 		  << " -c compressed VCFs (vcf.gz)\n"
 		  << " -m multiple output files\n"
@@ -737,24 +783,24 @@ int main(int argc, char **argv)
 
     //load list of GIDs
     int pos1,pos2,pos3,gid;
-    string linestream;
-    ifstream list("/home/roven/Documents/Project1/Other_tools/list_3k.csv");
+    string linestream,gidstr;
+    if(path[path.size()-1]=='/') path = path.substr(0,path.size()-1); //remove the last '/' from the path
+    ifstream list("/storage3/users/rfuentes/3k_ID_BOXCODE_IRIS.txt");
     if(!list.is_open()){
 	printf("ERROR: Cannot open the GID list.");
 	return 1;
     }
     for(int x=0;getline(list,linestream)!=NULL;x++){
 	gid=0;
-	pos1 = linestream.find_first_of(",");
-        pos2 = linestream.find_first_of(",", pos1+1);
-	if(pos1+1==pos2) continue; // skip rows with null BOX_POSITION_CODE
-        pos3 = linestream.find_first_of(",",pos2+1);
-	if(pos2+1<pos3) gid = atoi(linestream.substr(pos2+1,pos3-pos2-1).c_str());
-	boxcode_map.insert(pair<string,int>(linestream.substr(pos1+1,pos2-pos1-1),gid));
-	//printf("%s ",linestream.substr(pos1+1,pos2-pos1-1).c_str());
-	pos2 = linestream.find_first_of(",",pos3+1); //save IRIS_name
-	iris_map.insert(pair<string,int>(linestream.substr(pos3+1,pos2-pos3-1),gid));
-	//printf("%d %s\n",gid,linestream.substr(pos3+1,pos2-pos3-1).c_str());
+        pos1 = linestream.find_first_of(",");
+        pos2 = linestream.find_first_of(",",pos1+1);
+	gidstr = linestream.substr(pos1+1,pos2-pos1-1);
+	if(gidstr.find_first_not_of("0123456789.") == string::npos) gid = atoi(gidstr.c_str());
+	boxcode_map.insert(pair<string,int>(linestream.substr(0,pos1),gid));
+	//printf("%s ",linestream.substr(0,pos1).c_str());
+	pos1 = linestream.find_first_of(",",pos2+1); //save IRIS_name
+	iris_map.insert(pair<string,int>(linestream.substr(pos2+1,pos1-pos2-1),gid));
+	//printf("%d %s\n",gid,linestream.substr(pos2+1,pos1-pos2-1).c_str());
     }
     
     tally1=(double*)calloc(SAMPLECOUNT,sizeof(double));
@@ -790,9 +836,10 @@ int main(int argc, char **argv)
     chrnames.push_back("ChrSy");
     chrnames.push_back("ChrUn");
 
+    
     /*THREADING of the comparison*/	
     for(int i=0;i<NUMTHREADS; i++){
-        thread_data[i].dirpath=path+input;
+        thread_data[i].dirpath=path;
     	thread_data[i].chr = chrmap;
         thread_data[i].chrom = chrnames;
     	thread_data[i].snp = (char*)calloc(SIZE,sizeof(char));
@@ -806,6 +853,7 @@ int main(int argc, char **argv)
 	if(thread_data[i].depth==NULL){ printf("Not enough space for depth array."); return 1;}
         if(thread_data[i].qs==NULL){ printf("Not enough space for qs array."); return 1;}
     	thread_data[i].tid = i;
+	if(chromidx!=0) thread_data[i].tid = chromidx;
 	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]);
     }
 
@@ -813,18 +861,22 @@ int main(int argc, char **argv)
 	pthread_join(threads[i],NULL);
     }
     
-    int idx1=0,idx2=0,setsize=thread_data[0].vcf_list.size();
+
+    int idx1=0,idx2=0,setsize=thread_data[0].vcf_list.size();;
     string samname;
     for(int i=0;i<setsize;i++){ 
   	for(int j=0;j<DEPTH;j++)idx2=thread_data[0].vcf_list[i].find_last_of("/");
         idx1=thread_data[0].vcf_list[i].find_last_of("/",idx2-1)+1;  
-        samname = thread_data[0].vcf_list[i].substr(idx1,idx2-idx1); 
-        if(samname.find("IRIS")==string::npos)
-            samples.insert(pair<string,int>(samname,boxcode_map.find(samname)->second));
-	else
-	    samples.insert(pair<string,int>(samname,iris_map.find(samname)->second));
+        samname = thread_data[0].vcf_list[i].substr(idx1,idx2-idx1);  
+        if(samname.find("IRIS")==string::npos){
+	   if(boxcode_map.find(samname)!=boxcode_map.end())
+           	samples.insert(pair<string,int>(samname,boxcode_map.find(samname)->second));
+	}else{
+	   if(iris_map.find(samname)!=iris_map.end())
+	   	samples.insert(pair<string,int>(samname,iris_map.find(samname)->second));
+	}
     }
-
+ 
     time(&end);
     boxcode_map.clear();
     iris_map.clear();
@@ -839,17 +891,25 @@ int main(int argc, char **argv)
         for(int i=0;i<NUMTHREADS;i++){
 	    pthread_join(threads[i],NULL);
     	}
-        FILE *output1,*output2,*output3;
+        FILE *output1,*output2,*output3,*output4;
 	string temp=outfile+"_SNPPOS_vs_VARcount.txt"; 
 	output1=fopen(temp.c_str(),"w"); 
 	temp=outfile+"_POS_vs_DEPTH.txt"; 
 	output2=fopen(temp.c_str(),"w"); 
         temp=outfile+"_POS_vs_QS.txt"; 
 	output3=fopen(temp.c_str(),"w"); 
+        temp=outfile+"_SNP_SUPPORT.txt";
+        output4=fopen(temp.c_str(),"w");
+        fprintf(output4,"ChrID\tPos\tSupport\n");
 	for(int i=0;i<NUMTHREADS;i++){
 	    //SNPpos vs VarietyCount
-	    for(int j=0;j<SIZE;j++)
-		if(thread_data[i].count[j]!=0) tally1[thread_data[i].count[j]]++;
+	    for(int j=0;j<SIZE;j++){
+		if(thread_data[i].count[j]!=0){
+		    tally1[thread_data[i].count[j]]++;
+                    if(chromidx==0) fprintf(output4,"%d\t%d\t%d\n",(i+3),j,thread_data[i].count[j]);
+		    else fprintf(output4,"%d\t%d\t%d\n",(chromidx+3),j,thread_data[i].count[j]);
+		}
+            }
 	    //POS vs Depth
 	    for(int j=0;j<SAMPLECOUNT;j++){ 
 		tally2[j]+=thread_data[i].depth[j];
@@ -880,7 +940,7 @@ int main(int argc, char **argv)
     	}
     	fclose(output); 
     }
-
+    
     time(&end);
     chrmap.clear();
     samples.clear();
@@ -889,10 +949,10 @@ int main(int argc, char **argv)
 	if(thread_data[i].ref!=NULL) free(thread_data[i].ref);
 	if(thread_data[i].count!=NULL) free(thread_data[i].count);
 	if(thread_data[i].depth!=NULL) free(thread_data[i].depth);
+        if(!(thread_data[i].samples.empty())) thread_data[i].samples.clear();
+	thread_data[i].vcf_list.clear();
     }
     
-
     printf("Printing Time: %.f sec\n",difftime(end,start));
-    
     return 0;
 }
