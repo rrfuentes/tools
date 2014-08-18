@@ -1,5 +1,4 @@
-/*Last Update: Aug. 12, 2014
- *Author: Roven Rommel B. Fuentes
+/*Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
  *
  *SNP_universe with multithreading by chromosome
@@ -52,7 +51,7 @@ bool compressed=false;
 bool multioutput=false;
 int chromidx=0;
 int SIZE=45000000;
-int SAMPLECOUNT=1000;
+int SAMPLECOUNT=2000;
 int NUMTHREADS = 14;
 int DEPTH = 1;
 
@@ -197,6 +196,32 @@ int locateSNP_2(string filepath,void *thread_data){
     return 0;
 }
 
+void *readUniqList(void *thread_data){
+    threadData *t = (threadData*) thread_data;
+    string linestream;
+    int idx1,idx2;
+    printf("Reading Unique SNP Position List...");
+    if(!uniqlist_path.empty()){
+        ifstream list(uniqlist_path.c_str());
+        if(!list.is_open()){
+            printf("ERROR: Cannot open the Unique SNP position list.");
+            exit(EXIT_FAILURE);
+        }
+	int chr,pos,sub=0; //ChrSy=1000000; ChrUn=1000001
+        if(t->tid>=12) sub=999985; 
+        for(int x=0;getline(list,linestream)!=NULL;x++){
+            idx1 = linestream.find_first_of("\t");
+            chr = atoi(linestream.substr(0,idx1).c_str())-3-sub;  
+	    if(chr!=t->tid) continue;
+            idx2 = linestream.find_first_of("\t",idx1+1);
+            pos= atoi(linestream.substr(idx1+1,idx2-idx1-1).c_str());
+            t->snp[pos]='A'; 
+            t->ref[pos]=linestream[idx2+1]; printf("%d %d %c\n",chr,pos,t->ref[pos]);
+        }
+        list.close();
+    } 
+}
+
 void *readFolder(void *thread_data){
     DIR *dp;
     threadData *t = (threadData*) thread_data;
@@ -267,7 +292,7 @@ void *readFolder(void *thread_data){
 		        printf("thread%d -  %s\t",t->tid,filename.c_str());
 			//fprintf(t->vcf_list,"%s\n",temp.c_str());
 			t->vcf_list.push_back(temp);
-			locateSNP_1(temp,thread_data);
+			if(uniqlist_path.empty()) locateSNP_1(temp,thread_data);
 			time(&end);
             		printf("Time: %.f sec\n",difftime(end,start));
 		    }else if(!exten.compare(".gz") && compressed && filename.find(tempchrom)!=filename.npos){
@@ -282,7 +307,7 @@ void *readFolder(void *thread_data){
        			    if(excluded_acc.find(samname)!=excluded_acc.end()) continue;
 
 			    t->vcf_list.push_back(temp);
-			    locateSNP_2(temp,thread_data);
+			    if(uniqlist_path.empty()) locateSNP_2(temp,thread_data);
 			    time(&end);
             		    printf("Time: %.f sec\n",difftime(end,start));
 			}
@@ -297,6 +322,7 @@ void *readFolder(void *thread_data){
     }else{
 	printf("ERROR: Can't find the directory.");
     }
+     
     excluded_acc.clear();
 }
 
@@ -783,9 +809,10 @@ int main(int argc, char **argv)
 
     //load list of GIDs
     int pos1,pos2,pos3,gid;
-    string linestream,gidstr;
+    int idx1=0,idx2=0;
+    string samname,linestream,gidstr;
     if(path[path.size()-1]=='/') path = path.substr(0,path.size()-1); //remove the last '/' from the path
-    ifstream list("/storage3/users/rfuentes/3k_ID_BOXCODE_IRIS.txt");
+    ifstream list("/storage2/users/rfuentes/3k_ID_BOXCODE_IRIS.txt");
     if(!list.is_open()){
 	printf("ERROR: Cannot open the GID list.");
 	return 1;
@@ -854,16 +881,25 @@ int main(int argc, char **argv)
         if(thread_data[i].qs==NULL){ printf("Not enough space for qs array."); return 1;}
     	thread_data[i].tid = i;
 	if(chromidx!=0) thread_data[i].tid = chromidx;
-	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]);
+
+	pthread_create(&threads[i],NULL,readFolder, (void*) &thread_data[i]); 
     }
 
     for(int i=0;i<NUMTHREADS;i++){
 	pthread_join(threads[i],NULL);
     }
-    
 
-    int idx1=0,idx2=0,setsize=thread_data[0].vcf_list.size();;
-    string samname;
+    if(!uniqlist_path.empty()){
+    	for(int i=0;i<NUMTHREADS; i++){
+            pthread_create(&threads[i],NULL,readUniqList, (void*) &thread_data[i]);
+   	}
+
+    	for(int i=0;i<NUMTHREADS;i++){
+            pthread_join(threads[i],NULL);
+    	}
+    }   
+     
+    int setsize=thread_data[0].vcf_list.size();
     for(int i=0;i<setsize;i++){ 
   	for(int j=0;j<DEPTH;j++)idx2=thread_data[0].vcf_list[i].find_last_of("/");
         idx1=thread_data[0].vcf_list[i].find_last_of("/",idx2-1)+1;  
@@ -906,8 +942,14 @@ int main(int argc, char **argv)
 	    for(int j=0;j<SIZE;j++){
 		if(thread_data[i].count[j]!=0){
 		    tally1[thread_data[i].count[j]]++;
-                    if(chromidx==0) fprintf(output4,"%d\t%d\t%d\n",(i+3),j,thread_data[i].count[j]);
-		    else fprintf(output4,"%d\t%d\t%d\n",(chromidx+3),j,thread_data[i].count[j]);
+                    if(chromidx==0){
+			if(i<12)fprintf(output4,"%d\t%d\t%d\n",(i+3),j,thread_data[i].count[j]);
+			else fprintf(output4,"%d\t%d\t%d\n",(i+999988),j,thread_data[i].count[j]);
+		         
+		    }else{
+			if(chromidx<12) fprintf(output4,"%d\t%d\t%d\n",(chromidx+3),j,thread_data[i].count[j]);
+			else fprintf(output4,"%d\t%d\t%d\n",(chromidx+999988),j,thread_data[i].count[j]);
+		    }
 		}
             }
 	    //POS vs Depth
