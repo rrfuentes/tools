@@ -1,13 +1,14 @@
 /*Author: Roven Rommel B. Fuentes
  *TT-Chang Genetic Resources Center, International Rice Research Institute
+ *Last Modified: Aug.27,2014
  *
  *SNP_universe with multithreading by chromosome
- *QUAL precision
 
  *COMPILE:
 	g++ -o snpuniverse_SERIAL snpuniverse_SERIAL.cpp -lgzstream -lz -std=c++0x -lpthread
 
  *NOTE: Check SAMPLECOUNT and NUMTHREADS before running this program.
+ *Duplication (same sampleID and SNPID) may be present in the list as retrieved from VCF
 */
 
 #include <stdio.h>
@@ -51,7 +52,7 @@ bool compressed=false;
 bool multioutput=false;
 int chromidx=0;
 int SIZE=45000000;
-int SAMPLECOUNT=2000;
+int SAMPLECOUNT=1000;
 int NUMTHREADS = 14;
 int DEPTH = 1;
 
@@ -812,7 +813,7 @@ int main(int argc, char **argv)
     int idx1=0,idx2=0;
     string samname,linestream,gidstr;
     if(path[path.size()-1]=='/') path = path.substr(0,path.size()-1); //remove the last '/' from the path
-    ifstream list("/storage2/users/rfuentes/3k_ID_BOXCODE_IRIS.txt");
+    ifstream list("/storage3/users/rfuentes/3k_ID_BOXCODE_IRIS.txt");
     if(!list.is_open()){
 	printf("ERROR: Cannot open the GID list.");
 	return 1;
